@@ -162,7 +162,11 @@ function App() {
         throw new Error(result.error || 'Raccolta risorse non riuscita');
       }
       setRefreshTrigger((value) => value + 1);
-      setSuccessMessage(`Raccolta completata: +${result.data?.bonus ?? 0} risorse.`);
+      if (Number(result.data?.settlementBonus ?? 0) > 0) {
+        setSuccessMessage(`Raccolta completata: +${result.data?.territoryBonus ?? 0} base e +${result.data?.settlementBonus ?? 0} dall'insediamento, totale +${result.data?.totalGain ?? 0}.`);
+      } else {
+        setSuccessMessage(`Raccolta completata: +${result.data?.totalGain ?? result.data?.bonus ?? 0} risorse.`);
+      }
     } catch (err) {
       setError(err.message || 'Raccolta risorse non riuscita');
       throw err;
@@ -239,7 +243,7 @@ function App() {
           </section>
           <div className="layout">
             <section className="panel">
-              <PlayerPanel players={players} currentPlayerId={gameState?.current_player_id} onGather={gatherResources} />
+              <PlayerPanel players={players} currentPlayerId={gameState?.current_player_id} onGather={gatherResources} refreshTrigger={refreshTrigger} />
               <div className="divider" />
               <MapBoard players={players} currentPlayerId={gameState?.current_player_id} onMove={movePlayer} onBuild={buildSettlement} onUpgrade={upgradeSettlement} refreshTrigger={refreshTrigger} />
             </section>

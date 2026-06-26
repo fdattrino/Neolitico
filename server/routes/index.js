@@ -19,6 +19,11 @@ const TERRITORY_RESOURCE_BONUSES = {
   Grotta: 5,
   Valle: 8
 };
+const SETTLEMENT_RESOURCE_BONUSES = {
+  riparo: 2,
+  villaggio: 5,
+  citta: 10
+};
 
 function serializeLogRow(row) {
   let details = row.details;
@@ -366,16 +371,31 @@ router.post('/players/:id/gather', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Current territory not found.' });
     }
 
-    const bonus = TERRITORY_RESOURCE_BONUSES[territory.name];
-    if (typeof bonus !== 'number') {
+    const territoryBonus = TERRITORY_RESOURCE_BONUSES[territory.name];
+    if (typeof territoryBonus !== 'number') {
       return res.status(400).json({ success: false, error: 'Questo territorio non ha un bonus risorse configurato.' });
     }
 
-    await run('UPDATE players SET resources = resources + ?, has_gathered_this_turn = 1 WHERE id = ?', [bonus, playerId]);
+    const settlement = await fetchPlayerSettlementInTerritory(playerId, territory.id);
+    const settlementBonus = settlement ? SETTLEMENT_RESOURCE_BONUSES[settlement.level] || 0 : 0;
+    const totalGain = territoryBonus + settlementBonus;
+    const logMessage = settlement
+      ? `${player.name} raccoglie risorse nella ${territory.name}: +${territoryBonus} base, +${settlementBonus} dal ${settlement.level}, totale +${totalGain}.`
+      : `${player.name} raccoglie risorse nella ${territory.name}: +${territoryBonus} risorse.`;
+
+    await run('UPDATE players SET resources = resources + ?, has_gathered_this_turn = 1 WHERE id = ?', [totalGain, playerId]);
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
       playerId,
-      `${player.name} raccoglie risorse nella ${territory.name}: +${bonus} risorse.`,
-      JSON.stringify({ territoryId: territory.id, territoryName: territory.name, bonus })
+      logMessage,
+      JSON.stringify({
+        territoryId: territory.id,
+        territoryName: territory.name,
+        territoryBonus,
+        settlementId: settlement?.id ?? null,
+        settlementLevel: settlement?.level ?? null,
+        settlementBonus,
+        totalGain
+      })
     ]);
 
     const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [playerId]);
@@ -387,7 +407,11 @@ router.post('/players/:id/gather', async (req, res) => {
       data: {
         player: updatedPlayer,
         territory,
-        bonus,
+        settlement,
+        territoryBonus,
+        settlementBonus,
+        totalGain,
+        bonus: totalGain,
         settlements,
         territories,
         log: log.map(serializeLogRow)
