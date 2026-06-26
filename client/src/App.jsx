@@ -149,6 +149,26 @@ function App() {
     }
   };
 
+  const gatherResources = async (playerId) => {
+    try {
+      setError('');
+      setSuccessMessage('');
+      const response = await fetch(`${API_BASE}/players/${playerId}/gather`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Raccolta risorse non riuscita');
+      }
+      setRefreshTrigger((value) => value + 1);
+      setSuccessMessage(`Raccolta completata: +${result.data?.bonus ?? 0} risorse.`);
+    } catch (err) {
+      setError(err.message || 'Raccolta risorse non riuscita');
+      throw err;
+    }
+  };
+
   const upgradeSettlement = async (settlementId) => {
     try {
       setError('');
@@ -219,7 +239,7 @@ function App() {
           </section>
           <div className="layout">
             <section className="panel">
-              <PlayerPanel players={players} />
+              <PlayerPanel players={players} currentPlayerId={gameState?.current_player_id} onGather={gatherResources} />
               <div className="divider" />
               <MapBoard players={players} currentPlayerId={gameState?.current_player_id} onMove={movePlayer} onBuild={buildSettlement} onUpgrade={upgradeSettlement} refreshTrigger={refreshTrigger} />
             </section>

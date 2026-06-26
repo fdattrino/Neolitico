@@ -8,6 +8,17 @@ const UPGRADE_COSTS = {
   villaggio: { nextLevel: 'citta', cost: 20 }
 };
 const NOT_CURRENT_TURN_ERROR = 'Non è il turno di questo giocatore.';
+const TERRITORY_RESOURCE_BONUSES = {
+  Foresta: 8,
+  Fiume: 7,
+  Collina: 6,
+  Pianura: 9,
+  Lago: 7,
+  Montagna: 6,
+  Costa: 8,
+  Grotta: 5,
+  Valle: 8
+};
 
 function serializeLogRow(row) {
   let details = row.details;
@@ -163,7 +174,7 @@ async function requireCurrentPlayer(playerId, res) {
 
 router.get('/players', async (_req, res) => {
   try {
-    const players = await all('SELECT players.id, players.name, players.tribe, players.resources, players.current_territory_id, players.has_moved_this_turn, territories.name AS current_territory_name FROM players LEFT JOIN territories ON territories.id = players.current_territory_id ORDER BY players.id');
+    const players = await all('SELECT players.id, players.name, players.tribe, players.resources, players.current_territory_id, players.has_moved_this_turn, players.has_gathered_this_turn, territories.name AS current_territory_name FROM players LEFT JOIN territories ON territories.id = players.current_territory_id ORDER BY players.id');
     const purchasedBeliefs = await all('SELECT player_id, belief_card_id FROM player_beliefs ORDER BY player_id, belief_card_id');
 
     const ownedBeliefsByPlayer = purchasedBeliefs.reduce((acc, row) => {
@@ -319,6 +330,69 @@ router.post('/players/:id/move', async (req, res) => {
 
     const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [playerId]);
     res.json({ success: true, data: { player: updatedPlayer, territory } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/players/:id/gather', async (req, res) => {
+  try {
+    const playerId = Number(req.params.id);
+
+    if (Number.isNaN(playerId)) {
+      return res.status(400).json({ success: false, error: 'Valid player id is required.' });
+    }
+
+    const gameState = await requireCurrentPlayer(playerId, res);
+    if (!gameState) {
+      return;
+    }
+
+    const player = await get('SELECT * FROM players WHERE id = ?', [playerId]);
+    if (!player) {
+      return res.status(404).json({ success: false, error: 'Player not found.' });
+    }
+
+    if (Number(player.has_gathered_this_turn) === 1) {
+      return res.status(400).json({ success: false, error: 'Hai già raccolto risorse in questo turno.' });
+    }
+
+    if (!player.current_territory_id) {
+      return res.status(400).json({ success: false, error: 'Player is not currently in a territory.' });
+    }
+
+    const territory = await get('SELECT * FROM territories WHERE id = ?', [player.current_territory_id]);
+    if (!territory) {
+      return res.status(404).json({ success: false, error: 'Current territory not found.' });
+    }
+
+    const bonus = TERRITORY_RESOURCE_BONUSES[territory.name];
+    if (typeof bonus !== 'number') {
+      return res.status(400).json({ success: false, error: 'Questo territorio non ha un bonus risorse configurato.' });
+    }
+
+    await run('UPDATE players SET resources = resources + ?, has_gathered_this_turn = 1 WHERE id = ?', [bonus, playerId]);
+    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+      playerId,
+      `${player.name} raccoglie risorse nella ${territory.name}: +${bonus} risorse.`,
+      JSON.stringify({ territoryId: territory.id, territoryName: territory.name, bonus })
+    ]);
+
+    const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [playerId]);
+    const settlements = await fetchSettlements();
+    const territories = await fetchTerritoriesWithSettlements();
+    const log = await all('SELECT * FROM game_log ORDER BY id DESC');
+    res.json({
+      success: true,
+      data: {
+        player: updatedPlayer,
+        territory,
+        bonus,
+        settlements,
+        territories,
+        log: log.map(serializeLogRow)
+      }
+    });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -615,7 +689,7 @@ router.post('/turn/end', async (_req, res) => {
     const nextPlayer = isLastPlayer ? players[0] : players[currentIndex + 1];
     const nextRound = isLastPlayer ? gameState.round + 1 : gameState.round;
 
-    await run('UPDATE players SET has_moved_this_turn = 0');
+    await run('UPDATE players SET has_moved_this_turn = 0, has_gathered_this_turn = 0');
     await run('UPDATE game_state SET current_player_id = ?, round = ? WHERE id = ?', [nextPlayer.id, nextRound, gameState.id]);
 
     const message = isLastPlayer
@@ -643,10 +717,10 @@ router.post('/reset', async (_req, res) => {
     await run('DELETE FROM player_beliefs');
     await run('DELETE FROM game_log');
     await run('DELETE FROM settlements');
-    await run('UPDATE players SET resources = 10, has_moved_this_turn = 0, current_territory_id = CASE name WHEN ? THEN ? WHEN ? THEN ? WHEN ? THEN ? ELSE NULL END', ['Ayla', forest?.id ?? null, 'Bram', plain?.id ?? null, 'Iria', cave?.id ?? null]);
+    await run('UPDATE players SET resources = 10, has_moved_this_turn = 0, has_gathered_this_turn = 0, current_territory_id = CASE name WHEN ? THEN ? WHEN ? THEN ? WHEN ? THEN ? ELSE NULL END', ['Ayla', forest?.id ?? null, 'Bram', plain?.id ?? null, 'Iria', cave?.id ?? null]);
     await resetGameStateToAyla(1);
 
-    const players = await all('SELECT players.id, players.name, players.tribe, players.resources, players.current_territory_id, players.has_moved_this_turn, territories.name AS current_territory_name FROM players LEFT JOIN territories ON territories.id = players.current_territory_id ORDER BY players.id');
+    const players = await all('SELECT players.id, players.name, players.tribe, players.resources, players.current_territory_id, players.has_moved_this_turn, players.has_gathered_this_turn, territories.name AS current_territory_name FROM players LEFT JOIN territories ON territories.id = players.current_territory_id ORDER BY players.id');
     const gameState = await ensureValidGameState();
     res.json({ success: true, data: { message: 'Game reset successfully.', players, gameState } });
   } catch (error) {

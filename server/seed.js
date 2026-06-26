@@ -31,15 +31,15 @@ async function seed() {
   }
 
   const players = [
-    { name: 'Ayla', tribe: 'Cacciatrice', resources: 12, current_territory_id: territoryIdsByName['Foresta'], has_moved_this_turn: 0 },
-    { name: 'Bram', tribe: 'Costruttore', resources: 10, current_territory_id: territoryIdsByName['Pianura'], has_moved_this_turn: 0 },
-    { name: 'Iria', tribe: 'Guaritrice', resources: 11, current_territory_id: territoryIdsByName['Grotta'], has_moved_this_turn: 0 }
+    { name: 'Ayla', tribe: 'Cacciatrice', resources: 12, current_territory_id: territoryIdsByName['Foresta'], has_moved_this_turn: 0, has_gathered_this_turn: 0 },
+    { name: 'Bram', tribe: 'Costruttore', resources: 10, current_territory_id: territoryIdsByName['Pianura'], has_moved_this_turn: 0, has_gathered_this_turn: 0 },
+    { name: 'Iria', tribe: 'Guaritrice', resources: 11, current_territory_id: territoryIdsByName['Grotta'], has_moved_this_turn: 0, has_gathered_this_turn: 0 }
   ];
 
   for (const player of players) {
     await run(
-      'INSERT INTO players (name, tribe, resources, current_territory_id, has_moved_this_turn) VALUES (?, ?, ?, ?, ?)',
-      [player.name, player.tribe, player.resources, player.current_territory_id, player.has_moved_this_turn]
+      'INSERT INTO players (name, tribe, resources, current_territory_id, has_moved_this_turn, has_gathered_this_turn) VALUES (?, ?, ?, ?, ?, ?)',
+      [player.name, player.tribe, player.resources, player.current_territory_id, player.has_moved_this_turn, player.has_gathered_this_turn]
     );
   }
 
