@@ -7,7 +7,7 @@ const UPGRADE_COSTS = {
   riparo: { nextLevel: 'villaggio', cost: 10 },
   villaggio: { nextLevel: 'citta', cost: 20 }
 };
-const NOT_CURRENT_TURN_ERROR = 'Non e il turno di questo giocatore.';
+const NOT_CURRENT_TURN_ERROR = 'Non è il turno di questo giocatore.';
 
 function serializeLogRow(row) {
   let details = row.details;
@@ -108,15 +108,52 @@ async function fetchGameState() {
   );
 }
 
-async function requireCurrentPlayer(playerId, res) {
-  const gameState = await fetchGameState();
+async function fetchAyla() {
+  return get('SELECT id, name FROM players WHERE name = ? ORDER BY id LIMIT 1', ['Ayla']);
+}
 
-  if (!gameState || !gameState.current_player_id) {
-    res.status(400).json({ success: false, error: 'Lo stato della partita non e inizializzato.' });
+async function resetGameStateToAyla(round = 1) {
+  const ayla = await fetchAyla();
+  if (!ayla) {
     return null;
   }
 
-  if (gameState.current_player_id !== playerId) {
+  await run('DELETE FROM game_state');
+  await run('INSERT INTO game_state (current_player_id, round) VALUES (?, ?)', [ayla.id, round]);
+  return fetchGameState();
+}
+
+async function ensureValidGameState() {
+  const gameState = await fetchGameState();
+  if (!gameState) {
+    return resetGameStateToAyla(1);
+  }
+
+  if (!gameState.current_player_id || !gameState.current_player_name) {
+    return resetGameStateToAyla(Number(gameState.round) || 1);
+  }
+
+  const currentPlayer = await get('SELECT id FROM players WHERE id = ?', [gameState.current_player_id]);
+  if (!currentPlayer) {
+    return resetGameStateToAyla(Number(gameState.round) || 1);
+  }
+
+  return {
+    ...gameState,
+    current_player_id: Number(gameState.current_player_id),
+    round: Number(gameState.round)
+  };
+}
+
+async function requireCurrentPlayer(playerId, res) {
+  const gameState = await ensureValidGameState();
+
+  if (!gameState || !gameState.current_player_id) {
+    res.status(400).json({ success: false, error: 'Lo stato della partita non è inizializzato.' });
+    return null;
+  }
+
+  if (Number(gameState.current_player_id) !== Number(playerId)) {
     res.status(400).json({ success: false, error: NOT_CURRENT_TURN_ERROR });
     return null;
   }
@@ -126,7 +163,7 @@ async function requireCurrentPlayer(playerId, res) {
 
 router.get('/players', async (_req, res) => {
   try {
-    const players = await all('SELECT players.id, players.name, players.tribe, players.resources, players.current_territory_id, territories.name AS current_territory_name FROM players LEFT JOIN territories ON territories.id = players.current_territory_id ORDER BY players.id');
+    const players = await all('SELECT players.id, players.name, players.tribe, players.resources, players.current_territory_id, players.has_moved_this_turn, territories.name AS current_territory_name FROM players LEFT JOIN territories ON territories.id = players.current_territory_id ORDER BY players.id');
     const purchasedBeliefs = await all('SELECT player_id, belief_card_id FROM player_beliefs ORDER BY player_id, belief_card_id');
 
     const ownedBeliefsByPlayer = purchasedBeliefs.reduce((acc, row) => {
@@ -159,7 +196,7 @@ router.get('/beliefs', async (_req, res) => {
 
 router.get('/game-state', async (_req, res) => {
   try {
-    const gameState = await fetchGameState();
+    const gameState = await ensureValidGameState();
 
     if (!gameState) {
       return res.status(404).json({ success: false, error: 'Game state not found.' });
@@ -244,21 +281,40 @@ router.post('/players/:id/move', async (req, res) => {
     }
 
     const player = await get('SELECT * FROM players WHERE id = ?', [playerId]);
-    const territory = await get('SELECT * FROM territories WHERE id = ?', [territoryId]);
 
     if (!player) {
       return res.status(404).json({ success: false, error: 'Player not found.' });
     }
 
+    if (Number(player.has_moved_this_turn) === 1) {
+      return res.status(400).json({ success: false, error: 'Hai già effettuato uno spostamento in questo turno.' });
+    }
+
+    const currentTerritory = await get('SELECT * FROM territories WHERE id = ?', [player.current_territory_id]);
+    const territory = await get('SELECT * FROM territories WHERE id = ?', [territoryId]);
+
     if (!territory) {
       return res.status(404).json({ success: false, error: 'Territory not found.' });
     }
 
-    await run('UPDATE players SET current_territory_id = ? WHERE id = ?', [territoryId, playerId]);
+    if (!currentTerritory) {
+      return res.status(404).json({ success: false, error: 'Current territory not found.' });
+    }
+
+    if (Number(player.current_territory_id) === Number(territoryId)) {
+      return res.status(400).json({ success: false, error: 'Sei già in questo territorio.' });
+    }
+
+    const distance = Math.abs(territory.position_x - currentTerritory.position_x) + Math.abs(territory.position_y - currentTerritory.position_y);
+    if (distance !== 1) {
+      return res.status(400).json({ success: false, error: 'Puoi spostarti solo in un territorio adiacente.' });
+    }
+
+    await run('UPDATE players SET current_territory_id = ?, has_moved_this_turn = 1 WHERE id = ?', [territoryId, playerId]);
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
       playerId,
-      `${player.name} si sposta nel territorio ${territory.name}.`,
-      JSON.stringify({ territoryId, territoryName: territory.name })
+      `${player.name} si sposta da ${currentTerritory.name} a ${territory.name}.`,
+      JSON.stringify({ fromTerritoryId: currentTerritory.id, fromTerritoryName: currentTerritory.name, territoryId, territoryName: territory.name })
     ]);
 
     const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [playerId]);
@@ -540,9 +596,9 @@ router.get('/log', async (_req, res) => {
 
 router.post('/turn/end', async (_req, res) => {
   try {
-    const gameState = await fetchGameState();
+    const gameState = await ensureValidGameState();
     if (!gameState || !gameState.current_player_id) {
-      return res.status(400).json({ success: false, error: 'Lo stato della partita non e inizializzato.' });
+      return res.status(400).json({ success: false, error: 'Lo stato della partita non è inizializzato.' });
     }
 
     const players = await all('SELECT id, name FROM players ORDER BY id');
@@ -550,15 +606,16 @@ router.post('/turn/end', async (_req, res) => {
       return res.status(400).json({ success: false, error: 'No players found.' });
     }
 
-    const currentIndex = players.findIndex((player) => player.id === gameState.current_player_id);
+    const currentIndex = players.findIndex((player) => Number(player.id) === Number(gameState.current_player_id));
     if (currentIndex === -1) {
-      return res.status(400).json({ success: false, error: 'Il giocatore corrente non esiste piu.' });
+      return res.status(400).json({ success: false, error: 'Il giocatore corrente non esiste più.' });
     }
 
     const isLastPlayer = currentIndex === players.length - 1;
     const nextPlayer = isLastPlayer ? players[0] : players[currentIndex + 1];
     const nextRound = isLastPlayer ? gameState.round + 1 : gameState.round;
 
+    await run('UPDATE players SET has_moved_this_turn = 0');
     await run('UPDATE game_state SET current_player_id = ?, round = ? WHERE id = ?', [nextPlayer.id, nextRound, gameState.id]);
 
     const message = isLastPlayer
@@ -571,7 +628,7 @@ router.post('/turn/end', async (_req, res) => {
       JSON.stringify({ fromPlayerId: gameState.current_player_id, toPlayerId: nextPlayer.id, round: nextRound })
     ]);
 
-    const updatedGameState = await fetchGameState();
+    const updatedGameState = await ensureValidGameState();
     res.json({ success: true, data: updatedGameState });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -583,17 +640,14 @@ router.post('/reset', async (_req, res) => {
     const forest = await get('SELECT id FROM territories WHERE name = ?', ['Foresta']);
     const plain = await get('SELECT id FROM territories WHERE name = ?', ['Pianura']);
     const cave = await get('SELECT id FROM territories WHERE name = ?', ['Grotta']);
-    const ayla = await get('SELECT id FROM players WHERE name = ?', ['Ayla']);
-
     await run('DELETE FROM player_beliefs');
     await run('DELETE FROM game_log');
     await run('DELETE FROM settlements');
-    await run('UPDATE players SET resources = 10, current_territory_id = CASE name WHEN ? THEN ? WHEN ? THEN ? WHEN ? THEN ? ELSE NULL END', ['Ayla', forest?.id ?? null, 'Bram', plain?.id ?? null, 'Iria', cave?.id ?? null]);
-    await run('DELETE FROM game_state');
-    await run('INSERT INTO game_state (current_player_id, round) VALUES (?, ?)', [ayla?.id ?? null, 1]);
+    await run('UPDATE players SET resources = 10, has_moved_this_turn = 0, current_territory_id = CASE name WHEN ? THEN ? WHEN ? THEN ? WHEN ? THEN ? ELSE NULL END', ['Ayla', forest?.id ?? null, 'Bram', plain?.id ?? null, 'Iria', cave?.id ?? null]);
+    await resetGameStateToAyla(1);
 
-    const players = await all('SELECT players.id, players.name, players.tribe, players.resources, players.current_territory_id, territories.name AS current_territory_name FROM players LEFT JOIN territories ON territories.id = players.current_territory_id ORDER BY players.id');
-    const gameState = await fetchGameState();
+    const players = await all('SELECT players.id, players.name, players.tribe, players.resources, players.current_territory_id, players.has_moved_this_turn, territories.name AS current_territory_name FROM players LEFT JOIN territories ON territories.id = players.current_territory_id ORDER BY players.id');
+    const gameState = await ensureValidGameState();
     res.json({ success: true, data: { message: 'Game reset successfully.', players, gameState } });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });

@@ -7,6 +7,8 @@ function MapBoard({ players, currentPlayerId, onMove, onBuild, onUpgrade, refres
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedTerritoryIds, setSelectedTerritoryIds] = useState({});
+  const activePlayerId = Number(currentPlayerId);
+  const normalizeId = (value) => Number(value);
 
   useEffect(() => {
     const loadMapData = async () => {
@@ -50,17 +52,58 @@ function MapBoard({ players, currentPlayerId, onMove, onBuild, onUpgrade, refres
 
   players.forEach((player) => {
     if (player.current_territory_id) {
-      playersByTerritory[player.current_territory_id] = playersByTerritory[player.current_territory_id] || [];
-      playersByTerritory[player.current_territory_id].push(player.name);
+      const territoryId = normalizeId(player.current_territory_id);
+      playersByTerritory[territoryId] = playersByTerritory[territoryId] || [];
+      playersByTerritory[territoryId].push(player.name);
     }
   });
 
   const currentSettlementByPlayer = players.reduce((acc, player) => {
-    const territory = territories.find((item) => item.id === player.current_territory_id);
-    const currentSettlement = territory?.settlements?.find((settlement) => settlement.player_id === player.id) || null;
+    const territory = territories.find((item) => normalizeId(item.id) === normalizeId(player.current_territory_id));
+    const currentSettlement = territory?.settlements?.find((settlement) => normalizeId(settlement.player_id) === normalizeId(player.id)) || null;
     acc[player.id] = currentSettlement;
     return acc;
   }, {});
+
+  const getReachableTerritories = (player) => {
+    const currentTerritory = territories.find((territory) => normalizeId(territory.id) === normalizeId(player.current_territory_id));
+    if (!currentTerritory) {
+      return [];
+    }
+
+    return territories.filter((territory) => {
+      const distance = Math.abs(territory.position_x - currentTerritory.position_x) + Math.abs(territory.position_y - currentTerritory.position_y);
+      return distance === 1;
+    });
+  };
+
+  useEffect(() => {
+    if (territories.length === 0 || players.length === 0 || Number.isNaN(activePlayerId)) {
+      return;
+    }
+
+    const activePlayer = players.find((player) => normalizeId(player.id) === activePlayerId);
+    if (!activePlayer) {
+      return;
+    }
+
+    const reachableTerritories = getReachableTerritories(activePlayer);
+
+    setSelectedTerritoryIds((current) => {
+      const currentSelection = current[activePlayer.id];
+      const selectionStillValid = reachableTerritories.some((territory) => normalizeId(territory.id) === normalizeId(currentSelection));
+
+      if (selectionStillValid) {
+        return current;
+      }
+
+      if (reachableTerritories.length === 0) {
+        return { ...current, [activePlayer.id]: '' };
+      }
+
+      return { ...current, [activePlayer.id]: String(reachableTerritories[0].id) };
+    });
+  }, [territories, players, activePlayerId]);
 
   const handleMove = async (playerId) => {
     const selectedTerritoryId = selectedTerritoryIds[playerId];
@@ -90,7 +133,7 @@ function MapBoard({ players, currentPlayerId, onMove, onBuild, onUpgrade, refres
 
   const getSettlementAction = (player) => {
     const currentSettlement = currentSettlementByPlayer[player.id];
-    const isActivePlayer = player.id === currentPlayerId;
+    const isActivePlayer = Number(player.id) === activePlayerId;
 
     if (!isActivePlayer) {
       return {
@@ -159,8 +202,8 @@ function MapBoard({ players, currentPlayerId, onMove, onBuild, onUpgrade, refres
                     territory.settlements.map((settlement) => (
                       <div key={settlement.id} className="settlement-item">
                         <span>{settlement.player_name}: {settlement.level}</span>
-                        <button onClick={() => handleUpgrade(settlement.id)} disabled={settlement.level === 'citta' || settlement.player_id !== currentPlayerId}>
-                          {settlement.level === 'citta' ? 'Citta completa' : settlement.player_id !== currentPlayerId ? 'In attesa del turno' : 'Migliora'}
+                        <button onClick={() => handleUpgrade(settlement.id)} disabled={settlement.level === 'citta' || Number(settlement.player_id) !== activePlayerId}>
+                          {settlement.level === 'citta' ? 'Citta completa' : Number(settlement.player_id) !== activePlayerId ? 'In attesa del turno' : 'Migliora'}
                         </button>
                       </div>
                     ))
@@ -176,6 +219,10 @@ function MapBoard({ players, currentPlayerId, onMove, onBuild, onUpgrade, refres
             {players.map((player) => (
               (() => {
                 const settlementAction = getSettlementAction(player);
+                const reachableTerritories = getReachableTerritories(player);
+                const isActivePlayer = Number(player.id) === activePlayerId;
+                const hasMovedThisTurn = Number(player.has_moved_this_turn) === 1;
+                const moveDisabled = !isActivePlayer || hasMovedThisTurn || reachableTerritories.length === 0 || !selectedTerritoryIds[player.id];
 
                 return (
                   <div key={player.id} className="move-control">
@@ -184,19 +231,22 @@ function MapBoard({ players, currentPlayerId, onMove, onBuild, onUpgrade, refres
                     <select
                       value={selectedTerritoryIds[player.id] || ''}
                       onChange={(event) => setSelectedTerritoryIds((current) => ({ ...current, [player.id]: event.target.value }))}
+                      disabled={!isActivePlayer || hasMovedThisTurn || reachableTerritories.length === 0}
                     >
-                      <option value="">Seleziona territorio</option>
-                      {territories.map((territory) => (
+                      <option value="">{reachableTerritories.length > 0 ? 'Seleziona territorio' : 'Nessun territorio adiacente'}</option>
+                      {reachableTerritories.map((territory) => (
                         <option key={territory.id} value={territory.id}>
                           {territory.name}
                         </option>
                       ))}
                     </select>
-                    <button onClick={() => handleMove(player.id)} disabled={player.id !== currentPlayerId}>Sposta</button>
+                    <button onClick={() => handleMove(player.id)} disabled={moveDisabled}>Sposta</button>
                     <button onClick={settlementAction.action} disabled={settlementAction.disabled}>
                       {settlementAction.label}
                     </button>
-                    {player.id !== currentPlayerId && <span className="turn-waiting">In attesa del turno</span>}
+                    {!isActivePlayer && <span className="turn-waiting">In attesa del turno</span>}
+                    {isActivePlayer && hasMovedThisTurn && <span className="turn-waiting">Spostamento già effettuato</span>}
+                    {isActivePlayer && reachableTerritories.length === 0 && <span className="turn-waiting">Nessun territorio adiacente disponibile</span>}
                   </div>
                 );
               })()

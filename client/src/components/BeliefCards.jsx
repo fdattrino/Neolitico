@@ -1,5 +1,6 @@
 function BeliefCards({ beliefs, players, currentPlayerId, onBuy }) {
   const isAlreadyOwned = (player, beliefId) => (player.owned_belief_ids || []).includes(beliefId);
+  const activePlayerId = Number(currentPlayerId);
 
   return (
     <div>
@@ -14,7 +15,7 @@ function BeliefCards({ beliefs, players, currentPlayerId, onBuy }) {
               {players.map((player) => {
                 const alreadyOwned = isAlreadyOwned(player, belief.id);
                 const insufficientResources = player.resources < belief.cost;
-                const isActivePlayer = player.id === currentPlayerId;
+                const isActivePlayer = Number(player.id) === activePlayerId;
                 const disabled = alreadyOwned || insufficientResources || !isActivePlayer;
 
                 return (

@@ -1,11 +1,13 @@
 function EventPanel({ players, currentPlayerId, onDraw }) {
+  const activePlayerId = Number(currentPlayerId);
+
   return (
     <div>
       <h2>Pesca Evento</h2>
       <div className="actions">
         {players.map((player) => (
-          <button key={player.id} onClick={() => onDraw(player.id)} disabled={player.id !== currentPlayerId}>
-            {player.id === currentPlayerId ? `Pesca per ${player.name}` : `In attesa del turno: ${player.name}`}
+          <button key={player.id} onClick={() => onDraw(player.id)} disabled={Number(player.id) !== activePlayerId}>
+            {Number(player.id) === activePlayerId ? `Pesca per ${player.name}` : `In attesa del turno: ${player.name}`}
           </button>
         ))}
       </div>

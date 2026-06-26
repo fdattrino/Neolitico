@@ -1,4 +1,4 @@
-const { initDb, run } = require('./db');
+const { initDb, run, get } = require('./db');
 
 async function seed() {
   await initDb();
@@ -31,18 +31,21 @@ async function seed() {
   }
 
   const players = [
-    { name: 'Ayla', tribe: 'Cacciatrice', resources: 12, current_territory_id: territoryIdsByName['Foresta'] },
-    { name: 'Bram', tribe: 'Costruttore', resources: 10, current_territory_id: territoryIdsByName['Pianura'] },
-    { name: 'Iria', tribe: 'Guaritrice', resources: 11, current_territory_id: territoryIdsByName['Grotta'] }
+    { name: 'Ayla', tribe: 'Cacciatrice', resources: 12, current_territory_id: territoryIdsByName['Foresta'], has_moved_this_turn: 0 },
+    { name: 'Bram', tribe: 'Costruttore', resources: 10, current_territory_id: territoryIdsByName['Pianura'], has_moved_this_turn: 0 },
+    { name: 'Iria', tribe: 'Guaritrice', resources: 11, current_territory_id: territoryIdsByName['Grotta'], has_moved_this_turn: 0 }
   ];
 
-  const playerIdsByName = {};
   for (const player of players) {
-    const result = await run('INSERT INTO players (name, tribe, resources, current_territory_id) VALUES (?, ?, ?, ?)', [player.name, player.tribe, player.resources, player.current_territory_id]);
-    playerIdsByName[player.name] = result.lastID;
+    await run(
+      'INSERT INTO players (name, tribe, resources, current_territory_id, has_moved_this_turn) VALUES (?, ?, ?, ?, ?)',
+      [player.name, player.tribe, player.resources, player.current_territory_id, player.has_moved_this_turn]
+    );
   }
 
-  await run('INSERT INTO game_state (current_player_id, round) VALUES (?, ?)', [playerIdsByName.Ayla, 1]);
+  const ayla = await get('SELECT id FROM players WHERE name = ? ORDER BY id LIMIT 1', ['Ayla']);
+  await run('DELETE FROM game_state');
+  await run('INSERT INTO game_state (current_player_id, round) VALUES (?, ?)', [ayla?.id ?? null, 1]);
 
   const beliefCards = [
     { number: 1, title: 'Venerazione degli antenati', description: 'La comunità onora i defunti e li considera guide del presente.', technology: 'Rituali sacri', type_code: 'spiritual', cost: 2, effect_text: 'Ottieni +1 di coesione in ogni villaggio.' },

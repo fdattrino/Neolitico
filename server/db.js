@@ -72,6 +72,9 @@ function ensurePlayerColumns() {
       if (!columnNames.has('current_territory_id')) {
         statements.push('ALTER TABLE players ADD COLUMN current_territory_id INTEGER REFERENCES territories(id)');
       }
+      if (!columnNames.has('has_moved_this_turn')) {
+        statements.push('ALTER TABLE players ADD COLUMN has_moved_this_turn INTEGER NOT NULL DEFAULT 0');
+      }
 
       const runNext = () => {
         if (statements.length === 0) {
@@ -131,6 +134,7 @@ function initDb() {
         tribe TEXT NOT NULL,
         resources INTEGER NOT NULL DEFAULT 10,
         current_territory_id INTEGER,
+        has_moved_this_turn INTEGER NOT NULL DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(current_territory_id) REFERENCES territories(id)
       );
