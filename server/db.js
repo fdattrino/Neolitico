@@ -10,6 +10,54 @@ const db = new sqlite3.Database(dbPath, (err) => {
   console.log(`Connected to SQLite database at ${dbPath}`);
 });
 
+function ensureBeliefCardColumns() {
+  return new Promise((resolve, reject) => {
+    db.all('PRAGMA table_info(belief_cards)', (err, columns) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+
+      const columnNames = new Set(columns.map((column) => column.name));
+      const statements = [];
+
+      if (!columnNames.has('number')) {
+        statements.push('ALTER TABLE belief_cards ADD COLUMN number INTEGER');
+      }
+      if (!columnNames.has('title')) {
+        statements.push('ALTER TABLE belief_cards ADD COLUMN title TEXT');
+      }
+      if (!columnNames.has('technology')) {
+        statements.push('ALTER TABLE belief_cards ADD COLUMN technology TEXT');
+      }
+      if (!columnNames.has('type_code')) {
+        statements.push('ALTER TABLE belief_cards ADD COLUMN type_code TEXT');
+      }
+      if (!columnNames.has('effect_text')) {
+        statements.push('ALTER TABLE belief_cards ADD COLUMN effect_text TEXT');
+      }
+
+      const runNext = () => {
+        if (statements.length === 0) {
+          resolve();
+          return;
+        }
+
+        const statement = statements.shift();
+        db.run(statement, (alterErr) => {
+          if (alterErr) {
+            reject(alterErr);
+            return;
+          }
+          runNext();
+        });
+      };
+
+      runNext();
+    });
+  });
+}
+
 function initDb() {
   return new Promise((resolve, reject) => {
     const schema = `
@@ -26,8 +74,13 @@ function initDb() {
       CREATE TABLE IF NOT EXISTS belief_cards (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
+        title TEXT,
         description TEXT NOT NULL,
+        technology TEXT,
+        type_code TEXT,
         cost INTEGER NOT NULL,
+        effect_text TEXT,
+        number INTEGER,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -64,7 +117,10 @@ function initDb() {
         reject(err);
         return;
       }
-      resolve();
+
+      ensureBeliefCardColumns()
+        .then(() => resolve())
+        .catch(reject);
     });
   });
 }

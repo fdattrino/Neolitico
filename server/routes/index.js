@@ -41,7 +41,7 @@ router.get('/players', async (_req, res) => {
 
 router.get('/beliefs', async (_req, res) => {
   try {
-    const beliefs = await all('SELECT * FROM belief_cards ORDER BY id');
+    const beliefs = await all('SELECT * FROM belief_cards ORDER BY number ASC, id ASC');
     res.json({ success: true, data: beliefs });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
