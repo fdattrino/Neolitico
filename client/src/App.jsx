@@ -3,6 +3,7 @@ import PlayerPanel from './components/PlayerPanel';
 import BeliefCards from './components/BeliefCards';
 import EventPanel from './components/EventPanel';
 import GameLog from './components/GameLog';
+import MapBoard from './components/MapBoard';
 
 const API_BASE = 'http://localhost:3000/api';
 
@@ -100,6 +101,25 @@ function App() {
     }
   };
 
+  const movePlayer = async (playerId, territoryId) => {
+    try {
+      setSuccessMessage('');
+      const response = await fetch(`${API_BASE}/players/${playerId}/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ territoryId })
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Spostamento non riuscito');
+      }
+      setRefreshTrigger((value) => value + 1);
+      setSuccessMessage(`Spostamento completato.`);
+    } catch (err) {
+      setError(err.message || 'Spostamento non riuscito');
+    }
+  };
+
   return (
     <div className="app-shell">
       <header className="hero">
@@ -124,6 +144,8 @@ function App() {
         <div className="layout">
           <section className="panel">
             <PlayerPanel players={players} />
+            <div className="divider" />
+            <MapBoard players={players} onMove={movePlayer} refreshTrigger={refreshTrigger} />
           </section>
           <section className="panel">
             <BeliefCards beliefs={beliefs} players={players} onBuy={buyBelief} />

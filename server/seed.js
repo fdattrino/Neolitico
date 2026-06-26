@@ -6,17 +6,36 @@ async function seed() {
   await run('DELETE FROM player_beliefs');
   await run('DELETE FROM game_log');
   await run('DELETE FROM players');
+  await run('DELETE FROM territories');
   await run('DELETE FROM belief_cards');
   await run('DELETE FROM event_cards');
 
+  const territories = [
+    { name: 'Foresta', terrain_type: 'bosco', description: 'Territorio ricco di caccia, legna e frutti selvatici.', resource_bonus: 'caccia', position_x: 0, position_y: 0 },
+    { name: 'Fiume', terrain_type: 'acqua', description: 'Favorisce pesca, irrigazione e spostamenti.', resource_bonus: 'pesca', position_x: 1, position_y: 0 },
+    { name: 'Collina', terrain_type: 'altura', description: 'Zona adatta alla difesa e alla ricerca di selce.', resource_bonus: 'selce', position_x: 2, position_y: 0 },
+    { name: 'Pianura', terrain_type: 'pianura', description: 'Territorio favorevole all\'agricoltura.', resource_bonus: 'agricoltura', position_x: 0, position_y: 1 },
+    { name: 'Lago', terrain_type: 'acqua', description: 'Offre pesca, canneti e risorse alimentari.', resource_bonus: 'pesca', position_x: 1, position_y: 1 },
+    { name: 'Montagna', terrain_type: 'montagna', description: 'Territorio difficile ma ricco di pietra e minerali.', resource_bonus: 'pietra', position_x: 2, position_y: 1 },
+    { name: 'Costa', terrain_type: 'mare', description: 'Offre crostacei, pesca e contatti con altri gruppi.', resource_bonus: 'crostacei', position_x: 0, position_y: 2 },
+    { name: 'Grotta', terrain_type: 'riparo', description: 'Luogo di rifugio, pitture rupestri e riti.', resource_bonus: 'riparo', position_x: 1, position_y: 2 },
+    { name: 'Valle', terrain_type: 'valle', description: 'Area adatta alla nascita di villaggi stabili.', resource_bonus: 'insediamento', position_x: 2, position_y: 2 }
+  ];
+
+  const territoryIdsByName = {};
+  for (const territory of territories) {
+    const result = await run('INSERT INTO territories (name, terrain_type, description, resource_bonus, position_x, position_y) VALUES (?, ?, ?, ?, ?, ?)', [territory.name, territory.terrain_type, territory.description, territory.resource_bonus, territory.position_x, territory.position_y]);
+    territoryIdsByName[territory.name] = result.lastID;
+  }
+
   const players = [
-    { name: 'Ayla', tribe: 'Cacciatrice', resources: 12 },
-    { name: 'Bram', tribe: 'Costruttore', resources: 10 },
-    { name: 'Iria', tribe: 'Guaritrice', resources: 11 }
+    { name: 'Ayla', tribe: 'Cacciatrice', resources: 12, current_territory_id: territoryIdsByName['Foresta'] },
+    { name: 'Bram', tribe: 'Costruttore', resources: 10, current_territory_id: territoryIdsByName['Pianura'] },
+    { name: 'Iria', tribe: 'Guaritrice', resources: 11, current_territory_id: territoryIdsByName['Grotta'] }
   ];
 
   for (const player of players) {
-    await run('INSERT INTO players (name, tribe, resources) VALUES (?, ?, ?)', [player.name, player.tribe, player.resources]);
+    await run('INSERT INTO players (name, tribe, resources, current_territory_id) VALUES (?, ?, ?, ?)', [player.name, player.tribe, player.resources, player.current_territory_id]);
   }
 
   const beliefCards = [

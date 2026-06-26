@@ -17,7 +17,7 @@ function serializeLogRow(row) {
 
 router.get('/players', async (_req, res) => {
   try {
-    const players = await all('SELECT * FROM players ORDER BY id');
+    const players = await all('SELECT players.id, players.name, players.tribe, players.resources, players.current_territory_id, territories.name AS current_territory_name FROM players LEFT JOIN territories ON territories.id = players.current_territory_id ORDER BY players.id');
     const purchasedBeliefs = await all('SELECT player_id, belief_card_id FROM player_beliefs ORDER BY player_id, belief_card_id');
 
     const ownedBeliefsByPlayer = purchasedBeliefs.reduce((acc, row) => {
@@ -92,6 +92,49 @@ router.post('/players/:id/buy-belief', async (req, res) => {
   }
 });
 
+router.get('/territories', async (_req, res) => {
+  try {
+    const territories = await all('SELECT * FROM territories ORDER BY position_y, position_x, id');
+    res.json({ success: true, data: territories });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/players/:id/move', async (req, res) => {
+  try {
+    const playerId = Number(req.params.id);
+    const territoryId = Number(req.body.territoryId);
+
+    if (Number.isNaN(playerId) || Number.isNaN(territoryId)) {
+      return res.status(400).json({ success: false, error: 'Valid player id and territory id are required.' });
+    }
+
+    const player = await get('SELECT * FROM players WHERE id = ?', [playerId]);
+    const territory = await get('SELECT * FROM territories WHERE id = ?', [territoryId]);
+
+    if (!player) {
+      return res.status(404).json({ success: false, error: 'Player not found.' });
+    }
+
+    if (!territory) {
+      return res.status(404).json({ success: false, error: 'Territory not found.' });
+    }
+
+    await run('UPDATE players SET current_territory_id = ? WHERE id = ?', [territoryId, playerId]);
+    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+      playerId,
+      `${player.name} si sposta nel territorio ${territory.name}.`,
+      JSON.stringify({ territoryId, territoryName: territory.name })
+    ]);
+
+    const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [playerId]);
+    res.json({ success: true, data: { player: updatedPlayer, territory } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 router.get('/events', async (_req, res) => {
   try {
     const events = await all('SELECT * FROM event_cards ORDER BY id');
@@ -158,11 +201,15 @@ router.get('/log', async (_req, res) => {
 
 router.post('/reset', async (_req, res) => {
   try {
+    const forest = await get('SELECT id FROM territories WHERE name = ?', ['Foresta']);
+    const plain = await get('SELECT id FROM territories WHERE name = ?', ['Pianura']);
+    const cave = await get('SELECT id FROM territories WHERE name = ?', ['Grotta']);
+
     await run('DELETE FROM player_beliefs');
     await run('DELETE FROM game_log');
-    await run('UPDATE players SET resources = 10');
+    await run('UPDATE players SET resources = 10, current_territory_id = CASE name WHEN ? THEN ? WHEN ? THEN ? WHEN ? THEN ? ELSE NULL END', ['Ayla', forest?.id ?? null, 'Bram', plain?.id ?? null, 'Iria', cave?.id ?? null]);
 
-    const players = await all('SELECT * FROM players ORDER BY id');
+    const players = await all('SELECT players.id, players.name, players.tribe, players.resources, players.current_territory_id, territories.name AS current_territory_name FROM players LEFT JOIN territories ON territories.id = players.current_territory_id ORDER BY players.id');
     res.json({ success: true, data: { message: 'Game reset successfully.', players } });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });

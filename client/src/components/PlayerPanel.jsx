@@ -8,6 +8,7 @@ function PlayerPanel({ players }) {
             <h3>{player.name}</h3>
             <p><strong>Tribù:</strong> {player.tribe}</p>
             <p><strong>Risorse:</strong> {player.resources}</p>
+            <p><strong>Territorio:</strong> {player.current_territory_name || 'Nessuno'}</p>
           </div>
         ))}
       </div>

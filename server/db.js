@@ -58,17 +58,66 @@ function ensureBeliefCardColumns() {
   });
 }
 
+function ensurePlayerColumns() {
+  return new Promise((resolve, reject) => {
+    db.all('PRAGMA table_info(players)', (err, columns) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+
+      const columnNames = new Set(columns.map((column) => column.name));
+      const statements = [];
+
+      if (!columnNames.has('current_territory_id')) {
+        statements.push('ALTER TABLE players ADD COLUMN current_territory_id INTEGER REFERENCES territories(id)');
+      }
+
+      const runNext = () => {
+        if (statements.length === 0) {
+          resolve();
+          return;
+        }
+
+        const statement = statements.shift();
+        db.run(statement, (alterErr) => {
+          if (alterErr) {
+            reject(alterErr);
+            return;
+          }
+          runNext();
+        });
+      };
+
+      runNext();
+    });
+  });
+}
+
 function initDb() {
   return new Promise((resolve, reject) => {
     const schema = `
       PRAGMA foreign_keys = ON;
+
+      CREATE TABLE IF NOT EXISTS territories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        terrain_type TEXT NOT NULL,
+        description TEXT NOT NULL,
+        resource_bonus TEXT NOT NULL,
+        position_x INTEGER NOT NULL,
+        position_y INTEGER NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
 
       CREATE TABLE IF NOT EXISTS players (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         tribe TEXT NOT NULL,
         resources INTEGER NOT NULL DEFAULT 10,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        current_territory_id INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(current_territory_id) REFERENCES territories(id)
       );
 
       CREATE TABLE IF NOT EXISTS belief_cards (
@@ -118,7 +167,7 @@ function initDb() {
         return;
       }
 
-      ensureBeliefCardColumns()
+      Promise.all([ensureBeliefCardColumns(), ensurePlayerColumns()])
         .then(() => resolve())
         .catch(reject);
     });
