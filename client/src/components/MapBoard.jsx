@@ -55,6 +55,13 @@ function MapBoard({ players, onMove, onBuild, onUpgrade, refreshTrigger }) {
     }
   });
 
+  const currentSettlementByPlayer = players.reduce((acc, player) => {
+    const territory = territories.find((item) => item.id === player.current_territory_id);
+    const currentSettlement = territory?.settlements?.find((settlement) => settlement.player_id === player.id) || null;
+    acc[player.id] = currentSettlement;
+    return acc;
+  }, {});
+
   const handleMove = async (playerId) => {
     const selectedTerritoryId = selectedTerritoryIds[playerId];
     if (!selectedTerritoryId) {
@@ -79,6 +86,40 @@ function MapBoard({ players, onMove, onBuild, onUpgrade, refreshTrigger }) {
     } catch (err) {
       setError(err.message || 'Miglioramento non riuscito');
     }
+  };
+
+  const getSettlementAction = (player) => {
+    const currentSettlement = currentSettlementByPlayer[player.id];
+
+    if (!currentSettlement) {
+      return {
+        label: 'Costruisci riparo',
+        disabled: false,
+        action: () => handleBuild(player.id)
+      };
+    }
+
+    if (currentSettlement.level === 'riparo') {
+      return {
+        label: 'Migliora a villaggio',
+        disabled: false,
+        action: () => handleUpgrade(currentSettlement.id)
+      };
+    }
+
+    if (currentSettlement.level === 'villaggio') {
+      return {
+        label: 'Migliora a citta',
+        disabled: false,
+        action: () => handleUpgrade(currentSettlement.id)
+      };
+    }
+
+    return {
+      label: 'Citta completa',
+      disabled: true,
+      action: () => {}
+    };
   };
 
   return (
@@ -124,23 +165,31 @@ function MapBoard({ players, onMove, onBuild, onUpgrade, refreshTrigger }) {
 
           <div className="move-controls">
             {players.map((player) => (
-              <div key={player.id} className="move-control">
-                <strong>{player.name}</strong>
-                <span>{player.current_territory_name || 'Sconosciuto'}</span>
-                <select
-                  value={selectedTerritoryIds[player.id] || ''}
-                  onChange={(event) => setSelectedTerritoryIds((current) => ({ ...current, [player.id]: event.target.value }))}
-                >
-                  <option value="">Seleziona territorio</option>
-                  {territories.map((territory) => (
-                    <option key={territory.id} value={territory.id}>
-                      {territory.name}
-                    </option>
-                  ))}
-                </select>
-                <button onClick={() => handleMove(player.id)}>Sposta</button>
-                <button onClick={() => handleBuild(player.id)}>Costruisci riparo</button>
-              </div>
+              (() => {
+                const settlementAction = getSettlementAction(player);
+
+                return (
+                  <div key={player.id} className="move-control">
+                    <strong>{player.name}</strong>
+                    <span>{player.current_territory_name || 'Sconosciuto'}</span>
+                    <select
+                      value={selectedTerritoryIds[player.id] || ''}
+                      onChange={(event) => setSelectedTerritoryIds((current) => ({ ...current, [player.id]: event.target.value }))}
+                    >
+                      <option value="">Seleziona territorio</option>
+                      {territories.map((territory) => (
+                        <option key={territory.id} value={territory.id}>
+                          {territory.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button onClick={() => handleMove(player.id)}>Sposta</button>
+                    <button onClick={settlementAction.action} disabled={settlementAction.disabled}>
+                      {settlementAction.label}
+                    </button>
+                  </div>
+                );
+              })()
             ))}
           </div>
         </>

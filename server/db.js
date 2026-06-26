@@ -94,6 +94,21 @@ function ensurePlayerColumns() {
   });
 }
 
+function ensureSettlementConstraints() {
+  return new Promise((resolve, reject) => {
+    db.run(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_settlements_player_territory ON settlements(player_id, territory_id)',
+      (err) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve();
+      }
+    );
+  });
+}
+
 function initDb() {
   return new Promise((resolve, reject) => {
     const schema = `
@@ -177,7 +192,7 @@ function initDb() {
         return;
       }
 
-      Promise.all([ensureBeliefCardColumns(), ensurePlayerColumns()])
+      Promise.all([ensureBeliefCardColumns(), ensurePlayerColumns(), ensureSettlementConstraints()])
         .then(() => resolve())
         .catch(reject);
     });

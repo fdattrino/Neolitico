@@ -63,6 +63,40 @@ async function fetchTerritoriesWithSettlements() {
   }));
 }
 
+async function fetchPlayerSettlementsByLevel(playerId, level, limit) {
+  return all(
+    `SELECT id, territory_id, level
+     FROM settlements
+     WHERE player_id = ? AND level = ?
+     ORDER BY id
+     LIMIT ?`,
+    [playerId, level, limit]
+  );
+}
+
+async function deleteSettlementsByIds(ids) {
+  for (const settlementId of ids) {
+    await run('DELETE FROM settlements WHERE id = ?', [settlementId]);
+  }
+}
+
+async function fetchPlayerSettlementInTerritory(playerId, territoryId) {
+  if (!territoryId) {
+    return null;
+  }
+
+  return get(
+    `SELECT settlements.id, settlements.player_id, settlements.territory_id, settlements.level, settlements.created_at,
+            players.name AS player_name,
+            territories.name AS territory_name
+     FROM settlements
+     LEFT JOIN players ON players.id = settlements.player_id
+     LEFT JOIN territories ON territories.id = settlements.territory_id
+     WHERE settlements.player_id = ? AND settlements.territory_id = ?`,
+    [playerId, territoryId]
+  );
+}
+
 router.get('/players', async (_req, res) => {
   try {
     const players = await all('SELECT players.id, players.name, players.tribe, players.resources, players.current_territory_id, territories.name AS current_territory_name FROM players LEFT JOIN territories ON territories.id = players.current_territory_id ORDER BY players.id');
@@ -218,6 +252,11 @@ router.post('/players/:id/build-settlement', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Current territory not found.' });
     }
 
+    const existingSettlement = await fetchPlayerSettlementInTerritory(playerId, player.current_territory_id);
+    if (existingSettlement) {
+      return res.status(400).json({ success: false, error: 'Hai gia un insediamento in questo territorio.' });
+    }
+
     await run('UPDATE players SET resources = resources - ? WHERE id = ?', [BUILD_COST, playerId]);
     const settlementResult = await run('INSERT INTO settlements (player_id, territory_id, level) VALUES (?, ?, ?)', [playerId, player.current_territory_id, 'riparo']);
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
@@ -334,21 +373,91 @@ router.post('/players/:id/draw-event', async (req, res) => {
     }
 
     let newResources = player.resources;
+    let logMessage = `${player.name} pesca ${eventCard.title}: ${eventCard.description}`;
+
     if (eventCard.effect_type === 'gain_resources') {
       newResources = player.resources + eventCard.effect_value;
+      logMessage = `${player.name} pesca ${eventCard.title}: guadagna ${eventCard.effect_value} risorse.`;
     } else if (eventCard.effect_type === 'lose_resources') {
       newResources = Math.max(0, player.resources - eventCard.effect_value);
+      const lostResources = player.resources - newResources;
+      logMessage = `${player.name} pesca ${eventCard.title}: perde ${lostResources} risorse.`;
+    } else if (eventCard.effect_type === 'lose_shelters') {
+      const shelters = await fetchPlayerSettlementsByLevel(playerId, 'riparo', eventCard.effect_value);
+      await deleteSettlementsByIds(shelters.map((settlement) => settlement.id));
+      if (shelters.length === 0) {
+        logMessage = `${player.name} pesca ${eventCard.title}: non possiede ripari, nessuna perdita.`;
+      } else {
+        logMessage = `${player.name} pesca ${eventCard.title}: perde ${shelters.length} ${shelters.length === 1 ? 'riparo' : 'ripari'}.`;
+      }
+    } else if (eventCard.effect_type === 'lose_villages') {
+      const villages = await fetchPlayerSettlementsByLevel(playerId, 'villaggio', eventCard.effect_value);
+      await deleteSettlementsByIds(villages.map((settlement) => settlement.id));
+      if (villages.length === 0) {
+        logMessage = `${player.name} pesca ${eventCard.title}: non possiede villaggi, nessuna perdita.`;
+      } else {
+        logMessage = `${player.name} pesca ${eventCard.title}: perde ${villages.length} ${villages.length === 1 ? 'villaggio' : 'villaggi'}.`;
+      }
+    } else if (eventCard.effect_type === 'lose_city') {
+      const cities = await fetchPlayerSettlementsByLevel(playerId, 'citta', 1);
+      await deleteSettlementsByIds(cities.map((settlement) => settlement.id));
+      if (cities.length === 0) {
+        logMessage = `${player.name} pesca ${eventCard.title}: non possiede citta, nessuna perdita.`;
+      } else {
+        logMessage = `${player.name} pesca ${eventCard.title}: perde 1 citta.`;
+      }
+    } else if (eventCard.effect_type === 'gain_shelters') {
+      if (!player.current_territory_id) {
+        logMessage = `${player.name} pesca ${eventCard.title}: nessun territorio attuale, nessun riparo costruito.`;
+      } else {
+        const existingSettlement = await fetchPlayerSettlementInTerritory(playerId, player.current_territory_id);
+        if (existingSettlement) {
+          logMessage = `${player.name} pesca ${eventCard.title}: ha gia un insediamento in questo territorio, nessun nuovo riparo.`;
+        } else {
+          await run('INSERT INTO settlements (player_id, territory_id, level) VALUES (?, ?, ?)', [playerId, player.current_territory_id, 'riparo']);
+          logMessage = `${player.name} pesca ${eventCard.title}: costruisce 1 riparo nel territorio attuale.`;
+        }
+      }
+    } else if (eventCard.effect_type === 'gain_village') {
+      if (!player.current_territory_id) {
+        logMessage = `${player.name} pesca ${eventCard.title}: nessun territorio attuale, nessun villaggio conquistato.`;
+      } else {
+        const existingSettlement = await fetchPlayerSettlementInTerritory(playerId, player.current_territory_id);
+        if (!existingSettlement) {
+          await run('INSERT INTO settlements (player_id, territory_id, level) VALUES (?, ?, ?)', [playerId, player.current_territory_id, 'villaggio']);
+          logMessage = `${player.name} pesca ${eventCard.title}: conquista 1 villaggio.`;
+        } else if (existingSettlement.level === 'riparo') {
+          await run('UPDATE settlements SET level = ? WHERE id = ?', ['villaggio', existingSettlement.id]);
+          logMessage = `${player.name} pesca ${eventCard.title}: il riparo nel territorio attuale diventa un villaggio.`;
+        } else if (existingSettlement.level === 'villaggio') {
+          logMessage = `${player.name} pesca ${eventCard.title}: possiede gia un villaggio in questo territorio, nessun cambiamento.`;
+        } else {
+          logMessage = `${player.name} pesca ${eventCard.title}: possiede gia una citta in questo territorio, nessun cambiamento.`;
+        }
+      }
     }
 
     await run('UPDATE players SET resources = ? WHERE id = ?', [newResources, playerId]);
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
       playerId,
-      `Drew event: ${eventCard.title}`,
-      eventCard.description
+      logMessage,
+      JSON.stringify({ eventCardId: eventCard.id, effectType: eventCard.effect_type, effectValue: eventCard.effect_value })
     ]);
 
     const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [playerId]);
-    res.json({ success: true, data: { player: updatedPlayer, event: eventCard } });
+    const settlements = await fetchSettlements();
+    const territories = await fetchTerritoriesWithSettlements();
+    const log = await all('SELECT * FROM game_log ORDER BY id DESC');
+    res.json({
+      success: true,
+      data: {
+        player: updatedPlayer,
+        event: eventCard,
+        settlements,
+        territories,
+        log: log.map(serializeLogRow)
+      }
+    });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
