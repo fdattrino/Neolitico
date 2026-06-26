@@ -81,6 +81,23 @@ button:disabled {
   gap: 1rem;
 }
 
+.turn-panel {
+  background: #fff7df;
+  border: 1px solid #e3dccf;
+  border-radius: 16px;
+  padding: 1rem 1.2rem;
+  margin-bottom: 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.turn-panel h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
 .panel {
   background: white;
   border-radius: 16px;
@@ -173,6 +190,11 @@ button:disabled {
   padding: 0.45rem 0.6rem;
 }
 
+.turn-waiting {
+  color: #6b7280;
+  font-style: italic;
+}
+
 .settlement-list {
   margin-top: 0.6rem;
   display: grid;
@@ -245,6 +267,11 @@ button:disabled {
   }
 
   .hero-content {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .turn-panel {
     flex-direction: column;
     align-items: flex-start;
   }

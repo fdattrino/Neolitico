@@ -6,6 +6,7 @@ async function seed() {
   await run('DELETE FROM player_beliefs');
   await run('DELETE FROM game_log');
   await run('DELETE FROM settlements');
+  await run('DELETE FROM game_state');
   await run('DELETE FROM players');
   await run('DELETE FROM territories');
   await run('DELETE FROM belief_cards');
@@ -35,9 +36,13 @@ async function seed() {
     { name: 'Iria', tribe: 'Guaritrice', resources: 11, current_territory_id: territoryIdsByName['Grotta'] }
   ];
 
+  const playerIdsByName = {};
   for (const player of players) {
-    await run('INSERT INTO players (name, tribe, resources, current_territory_id) VALUES (?, ?, ?, ?)', [player.name, player.tribe, player.resources, player.current_territory_id]);
+    const result = await run('INSERT INTO players (name, tribe, resources, current_territory_id) VALUES (?, ?, ?, ?)', [player.name, player.tribe, player.resources, player.current_territory_id]);
+    playerIdsByName[player.name] = result.lastID;
   }
+
+  await run('INSERT INTO game_state (current_player_id, round) VALUES (?, ?)', [playerIdsByName.Ayla, 1]);
 
   const beliefCards = [
     { number: 1, title: 'Venerazione degli antenati', description: 'La comunità onora i defunti e li considera guide del presente.', technology: 'Rituali sacri', type_code: 'spiritual', cost: 2, effect_text: 'Ottieni +1 di coesione in ogni villaggio.' },

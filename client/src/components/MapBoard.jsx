@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 
 const API_BASE = 'http://localhost:3000/api';
 
-function MapBoard({ players, onMove, onBuild, onUpgrade, refreshTrigger }) {
+function MapBoard({ players, currentPlayerId, onMove, onBuild, onUpgrade, refreshTrigger }) {
   const [territories, setTerritories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -90,6 +90,15 @@ function MapBoard({ players, onMove, onBuild, onUpgrade, refreshTrigger }) {
 
   const getSettlementAction = (player) => {
     const currentSettlement = currentSettlementByPlayer[player.id];
+    const isActivePlayer = player.id === currentPlayerId;
+
+    if (!isActivePlayer) {
+      return {
+        label: 'In attesa del turno',
+        disabled: true,
+        action: () => {}
+      };
+    }
 
     if (!currentSettlement) {
       return {
@@ -150,8 +159,8 @@ function MapBoard({ players, onMove, onBuild, onUpgrade, refreshTrigger }) {
                     territory.settlements.map((settlement) => (
                       <div key={settlement.id} className="settlement-item">
                         <span>{settlement.player_name}: {settlement.level}</span>
-                        <button onClick={() => handleUpgrade(settlement.id)} disabled={settlement.level === 'citta'}>
-                          Migliora
+                        <button onClick={() => handleUpgrade(settlement.id)} disabled={settlement.level === 'citta' || settlement.player_id !== currentPlayerId}>
+                          {settlement.level === 'citta' ? 'Citta completa' : settlement.player_id !== currentPlayerId ? 'In attesa del turno' : 'Migliora'}
                         </button>
                       </div>
                     ))
@@ -183,10 +192,11 @@ function MapBoard({ players, onMove, onBuild, onUpgrade, refreshTrigger }) {
                         </option>
                       ))}
                     </select>
-                    <button onClick={() => handleMove(player.id)}>Sposta</button>
+                    <button onClick={() => handleMove(player.id)} disabled={player.id !== currentPlayerId}>Sposta</button>
                     <button onClick={settlementAction.action} disabled={settlementAction.disabled}>
                       {settlementAction.label}
                     </button>
+                    {player.id !== currentPlayerId && <span className="turn-waiting">In attesa del turno</span>}
                   </div>
                 );
               })()

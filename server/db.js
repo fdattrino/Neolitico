@@ -177,6 +177,13 @@ function initDb() {
         FOREIGN KEY(territory_id) REFERENCES territories(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS game_state (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        current_player_id INTEGER,
+        round INTEGER NOT NULL DEFAULT 1,
+        FOREIGN KEY(current_player_id) REFERENCES players(id)
+      );
+
       CREATE TABLE IF NOT EXISTS game_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         player_id INTEGER,

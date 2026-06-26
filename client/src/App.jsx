@@ -10,6 +10,7 @@ const API_BASE = 'http://localhost:3000/api';
 function App() {
   const [players, setPlayers] = useState([]);
   const [beliefs, setBeliefs] = useState([]);
+  const [gameState, setGameState] = useState(null);
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [loading, setLoading] = useState(true);
@@ -18,20 +19,23 @@ function App() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [playersRes, beliefsRes] = await Promise.all([
+      const [playersRes, beliefsRes, gameStateRes] = await Promise.all([
         fetch(`${API_BASE}/players`),
-        fetch(`${API_BASE}/beliefs`)
+        fetch(`${API_BASE}/beliefs`),
+        fetch(`${API_BASE}/game-state`)
       ]);
 
       const playersData = await playersRes.json();
       const beliefsData = await beliefsRes.json();
+      const gameStateData = await gameStateRes.json();
 
-      if (!playersRes.ok || !beliefsRes.ok) {
+      if (!playersRes.ok || !beliefsRes.ok || !gameStateRes.ok) {
         throw new Error('Errore nel caricamento dei dati');
       }
 
       setPlayers(playersData.data || []);
       setBeliefs(beliefsData.data || []);
+      setGameState(gameStateData.data || null);
       setError('');
     } catch (err) {
       setError(err.message || 'Impossibile raggiungere il backend');
@@ -165,6 +169,25 @@ function App() {
     }
   };
 
+  const endTurn = async () => {
+    try {
+      setError('');
+      setSuccessMessage('');
+      const response = await fetch(`${API_BASE}/turn/end`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Fine turno non riuscita');
+      }
+      setRefreshTrigger((value) => value + 1);
+      setSuccessMessage('Turno aggiornato.');
+    } catch (err) {
+      setError(err.message || 'Fine turno non riuscita');
+    }
+  };
+
   return (
     <div className="app-shell">
       <header className="hero">
@@ -186,23 +209,32 @@ function App() {
       {loading ? (
         <p className="status">Caricamento della partita…</p>
       ) : (
-        <div className="layout">
-          <section className="panel">
-            <PlayerPanel players={players} />
-            <div className="divider" />
-            <MapBoard players={players} onMove={movePlayer} onBuild={buildSettlement} onUpgrade={upgradeSettlement} refreshTrigger={refreshTrigger} />
-          </section>
-          <section className="panel">
-            <BeliefCards beliefs={beliefs} players={players} onBuy={buyBelief} />
-          </section>
-          <section className="panel">
-            <div className="events-stack">
-              <EventPanel players={players} onDraw={drawEvent} />
-              <div className="divider" />
-              <GameLog refreshTrigger={refreshTrigger} />
+        <>
+          <section className="turn-panel">
+            <div>
+              <p className="eyebrow">Turno corrente</p>
+              <h2>Round {gameState?.round} - Tocca ad {gameState?.current_player_name}</h2>
             </div>
+            <button onClick={endTurn}>Fine turno</button>
           </section>
-        </div>
+          <div className="layout">
+            <section className="panel">
+              <PlayerPanel players={players} />
+              <div className="divider" />
+              <MapBoard players={players} currentPlayerId={gameState?.current_player_id} onMove={movePlayer} onBuild={buildSettlement} onUpgrade={upgradeSettlement} refreshTrigger={refreshTrigger} />
+            </section>
+            <section className="panel">
+              <BeliefCards beliefs={beliefs} players={players} currentPlayerId={gameState?.current_player_id} onBuy={buyBelief} />
+            </section>
+            <section className="panel">
+              <div className="events-stack">
+                <EventPanel players={players} currentPlayerId={gameState?.current_player_id} onDraw={drawEvent} />
+                <div className="divider" />
+                <GameLog refreshTrigger={refreshTrigger} />
+              </div>
+            </section>
+          </div>
+        </>
       )}
     </div>
   );

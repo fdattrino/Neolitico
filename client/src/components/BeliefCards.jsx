@@ -1,4 +1,4 @@
-function BeliefCards({ beliefs, players, onBuy }) {
+function BeliefCards({ beliefs, players, currentPlayerId, onBuy }) {
   const isAlreadyOwned = (player, beliefId) => (player.owned_belief_ids || []).includes(beliefId);
 
   return (
@@ -14,7 +14,8 @@ function BeliefCards({ beliefs, players, onBuy }) {
               {players.map((player) => {
                 const alreadyOwned = isAlreadyOwned(player, belief.id);
                 const insufficientResources = player.resources < belief.cost;
-                const disabled = alreadyOwned || insufficientResources;
+                const isActivePlayer = player.id === currentPlayerId;
+                const disabled = alreadyOwned || insufficientResources || !isActivePlayer;
 
                 return (
                   <button
@@ -22,7 +23,7 @@ function BeliefCards({ beliefs, players, onBuy }) {
                     onClick={() => onBuy(player.id, belief.id)}
                     disabled={disabled}
                   >
-                    {alreadyOwned ? 'Già posseduta' : insufficientResources ? 'Risorse insufficienti' : `Compra per ${player.name}`}
+                    {alreadyOwned ? 'Gia posseduta' : insufficientResources ? 'Risorse insufficienti' : !isActivePlayer ? `In attesa del turno: ${player.name}` : `Compra per ${player.name}`}
                   </button>
                 );
               })}
