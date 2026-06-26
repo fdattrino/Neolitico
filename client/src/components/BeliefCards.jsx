@@ -1,4 +1,6 @@
 function BeliefCards({ beliefs, players, onBuy }) {
+  const isAlreadyOwned = (player, beliefId) => (player.owned_belief_ids || []).includes(beliefId);
+
   return (
     <div>
       <h2>Carte Credenza</h2>
@@ -9,11 +11,21 @@ function BeliefCards({ beliefs, players, onBuy }) {
             <p>{belief.description}</p>
             <p><strong>Costo:</strong> {belief.cost} risorse</p>
             <div className="actions">
-              {players.map((player) => (
-                <button key={player.id} onClick={() => onBuy(player.id, belief.id)}>
-                  Compra per {player.name}
-                </button>
-              ))}
+              {players.map((player) => {
+                const alreadyOwned = isAlreadyOwned(player, belief.id);
+                const insufficientResources = player.resources < belief.cost;
+                const disabled = alreadyOwned || insufficientResources;
+
+                return (
+                  <button
+                    key={player.id}
+                    onClick={() => onBuy(player.id, belief.id)}
+                    disabled={disabled}
+                  >
+                    {alreadyOwned ? 'Già posseduta' : insufficientResources ? 'Risorse insufficienti' : `Compra per ${player.name}`}
+                  </button>
+                );
+              })}
             </div>
           </div>
         ))}

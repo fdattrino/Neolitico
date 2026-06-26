@@ -28,6 +28,11 @@ button:hover {
   background: #24553b;
 }
 
+button:disabled {
+  background: #b8c4bd;
+  cursor: not-allowed;
+}
+
 .app-shell {
   max-width: 1200px;
   margin: 0 auto;
@@ -40,6 +45,22 @@ button:hover {
   border-radius: 16px;
   padding: 1.5rem 2rem;
   margin-bottom: 1.5rem;
+}
+
+.hero-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.hero-button {
+  background: #f4b942;
+  color: #1f2937;
+}
+
+.hero-button:hover {
+  background: #e0a52b;
 }
 
 .eyebrow {
@@ -103,6 +124,14 @@ button:hover {
   margin-bottom: 1rem;
 }
 
+.success-message {
+  background: #eef9f1;
+  color: #24553b;
+  padding: 0.8rem 1rem;
+  border-radius: 10px;
+  margin-bottom: 1rem;
+}
+
 .status {
   text-align: center;
   color: #4b5563;
@@ -122,5 +151,10 @@ button:hover {
 @media (max-width: 800px) {
   .layout {
     grid-template-columns: 1fr;
+  }
+
+  .hero-content {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }

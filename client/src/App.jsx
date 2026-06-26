@@ -9,30 +9,28 @@ const API_BASE = 'http://localhost:3000/api';
 function App() {
   const [players, setPlayers] = useState([]);
   const [beliefs, setBeliefs] = useState([]);
-  const [log, setLog] = useState([]);
   const [error, setError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
   const [loading, setLoading] = useState(true);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   const loadData = async () => {
     try {
       setLoading(true);
-      const [playersRes, beliefsRes, logRes] = await Promise.all([
+      const [playersRes, beliefsRes] = await Promise.all([
         fetch(`${API_BASE}/players`),
-        fetch(`${API_BASE}/beliefs`),
-        fetch(`${API_BASE}/log`)
+        fetch(`${API_BASE}/beliefs`)
       ]);
 
       const playersData = await playersRes.json();
       const beliefsData = await beliefsRes.json();
-      const logData = await logRes.json();
 
-      if (!playersRes.ok || !beliefsRes.ok || !logRes.ok) {
+      if (!playersRes.ok || !beliefsRes.ok) {
         throw new Error('Errore nel caricamento dei dati');
       }
 
       setPlayers(playersData.data || []);
       setBeliefs(beliefsData.data || []);
-      setLog(logData.data || []);
       setError('');
     } catch (err) {
       setError(err.message || 'Impossibile raggiungere il backend');
@@ -43,10 +41,11 @@ function App() {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [refreshTrigger]);
 
   const buyBelief = async (playerId, beliefCardId) => {
     try {
+      setSuccessMessage('');
       const response = await fetch(`${API_BASE}/players/${playerId}/buy-belief`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -56,7 +55,7 @@ function App() {
       if (!response.ok) {
         throw new Error(result.error || 'Acquisto non riuscito');
       }
-      await loadData();
+      setRefreshTrigger((value) => value + 1);
     } catch (err) {
       setError(err.message || 'Acquisto non riuscito');
     }
@@ -64,6 +63,7 @@ function App() {
 
   const drawEvent = async (playerId) => {
     try {
+      setSuccessMessage('');
       const response = await fetch(`${API_BASE}/players/${playerId}/draw-event`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
@@ -72,23 +72,51 @@ function App() {
       if (!response.ok) {
         throw new Error(result.error || 'Pesca evento non riuscita');
       }
-      await loadData();
+      setRefreshTrigger((value) => value + 1);
     } catch (err) {
       setError(err.message || 'Pesca evento non riuscita');
+    }
+  };
+
+  const resetGame = async () => {
+    const confirmed = window.confirm('Avviare una nuova partita? Questa azione resetta le risorse e il diario.');
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setSuccessMessage('');
+      const response = await fetch(`${API_BASE}/reset`, {
+        method: 'POST'
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Reset non riuscito');
+      }
+      setRefreshTrigger((value) => value + 1);
+      setSuccessMessage(result.data?.message || 'Nuova partita avviata.');
+    } catch (err) {
+      setError(err.message || 'Reset non riuscito');
     }
   };
 
   return (
     <div className="app-shell">
       <header className="hero">
-        <div>
-          <p className="eyebrow">Gioco didattico</p>
-          <h1>Neolitico</h1>
-          <p className="subtitle">Simula la vita della comunità preistorica: risorse, credenze ed eventi.</p>
+        <div className="hero-content">
+          <div>
+            <p className="eyebrow">Gioco didattico</p>
+            <h1>Neolitico</h1>
+            <p className="subtitle">Simula la vita della comunità preistorica: risorse, credenze ed eventi.</p>
+          </div>
+          <button className="hero-button" onClick={resetGame}>
+            Nuova partita
+          </button>
         </div>
       </header>
 
       {error && <div className="alert">{error}</div>}
+      {successMessage && <div className="success-message">{successMessage}</div>}
 
       {loading ? (
         <p className="status">Caricamento della partita…</p>
@@ -104,7 +132,7 @@ function App() {
             <div className="events-stack">
               <EventPanel players={players} onDraw={drawEvent} />
               <div className="divider" />
-              <GameLog log={log} />
+              <GameLog refreshTrigger={refreshTrigger} />
             </div>
           </section>
         </div>

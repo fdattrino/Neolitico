@@ -18,7 +18,22 @@ function serializeLogRow(row) {
 router.get('/players', async (_req, res) => {
   try {
     const players = await all('SELECT * FROM players ORDER BY id');
-    res.json({ success: true, data: players });
+    const purchasedBeliefs = await all('SELECT player_id, belief_card_id FROM player_beliefs ORDER BY player_id, belief_card_id');
+
+    const ownedBeliefsByPlayer = purchasedBeliefs.reduce((acc, row) => {
+      if (!acc[row.player_id]) {
+        acc[row.player_id] = [];
+      }
+      acc[row.player_id].push(row.belief_card_id);
+      return acc;
+    }, {});
+
+    const playersWithBeliefs = players.map((player) => ({
+      ...player,
+      owned_belief_ids: ownedBeliefsByPlayer[player.id] || []
+    }));
+
+    res.json({ success: true, data: playersWithBeliefs });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }

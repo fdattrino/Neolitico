@@ -1,3 +1,6 @@
 .env
 *.log
 server/neolitico.sqlite
+client/node_modules/
+server/node_modules/
+client/dist/
