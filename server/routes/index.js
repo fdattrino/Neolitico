@@ -137,7 +137,7 @@ router.post('/players/:id/draw-event', async (req, res) => {
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
       playerId,
       `Drew event: ${eventCard.title}`,
-      JSON.stringify({ eventCardId: eventCard.id, effectType: eventCard.effect_type, effectValue: eventCard.effect_value })
+      eventCard.description
     ]);
 
     const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [playerId]);

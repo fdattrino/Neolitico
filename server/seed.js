@@ -49,9 +49,28 @@ async function seed() {
   }
 
   const eventCards = [
-    { title: 'Marea abbondante', description: 'La pesca è ricca e la tribù raccoglie cibo in abbondanza.', effect_type: 'gain_resources', effect_value: 3 },
-    { title: 'Inverno rigido', description: 'Le temperature scendono e i rifornimenti diminuiscono.', effect_type: 'lose_resources', effect_value: 2 },
-    { title: 'Scoperta di una cava', description: 'Una nuova cava offre materiale per nuove costruzioni.', effect_type: 'gain_resources', effect_value: 4 }
+    { title: 'Giacimento di selce', description: 'Una cava di selce emerge tra le rocce e la tribù raccoglie materiale prezioso.', effect_type: 'gain_resources', effect_value: 20 },
+    { title: 'Incendio', description: 'Un incendio distrugge riserve e attrezzi, lasciando la comunità più povera.', effect_type: 'lose_resources', effect_value: 15 },
+    { title: 'Pioggia abbondante', description: 'Le piogge rigenerano il terreno e rendono la caccia più proficua.', effect_type: 'gain_resources', effect_value: 20 },
+    { title: 'Inverno rigido', description: 'Le basse temperature costringono la tribù a consumare più risorse per sopravvivere.', effect_type: 'lose_resources', effect_value: 20 },
+    { title: 'Rito propiziatorio della caccia', description: 'Il rito sostiene la caccia e porta fortuna alla comunità.', effect_type: 'gain_resources', effect_value: 20 },
+    { title: 'Siccità', description: 'La mancanza d’acqua rende difficili raccolta e trasporto.', effect_type: 'lose_resources', effect_value: 15 },
+    { title: 'Raccolta di miele', description: 'Una colonia di api offre un prezioso bottino di miele e dolcezze.', effect_type: 'gain_resources', effect_value: 10 },
+    { title: 'Malattia', description: 'Una malattia colpisce il villaggio: si perdono 3 ripari o 1 villaggio.', effect_type: 'info', effect_value: 0 },
+    { title: 'Eruzione vulcanica', description: 'L’eruzione distrugge parte del territorio e costringe la tribù a perdere 2 ripari o 1 villaggio.', effect_type: 'info', effect_value: 0 },
+    { title: 'Sconfitta in battaglia', description: 'La tribù esce sconfitta e perde 2 villaggi.', effect_type: 'info', effect_value: 0 },
+    { title: 'Assalto fortunato', description: 'Un attacco ben riuscito conquista 1 villaggio se la tribù ne possiede già uno.', effect_type: 'info', effect_value: 0 },
+    { title: 'Migrazione di animali', description: 'Gli animali si spostano verso nuovi pascoli e il popolo trova abbondanza.', effect_type: 'gain_resources', effect_value: 30 },
+    { title: 'Scoperta del formaggio', description: 'Un nuovo metodo di conservazione del latte porta a un surplus di cibo.', effect_type: 'gain_resources', effect_value: 5 },
+    { title: 'Terremoto', description: 'Il terremoto danneggia gravemente una città e la comunità deve ricostruire.', effect_type: 'info', effect_value: 0 },
+    { title: 'Guerra interna', description: 'Le tensioni interne bloccano la crescita della popolazione per un turno.', effect_type: 'info', effect_value: 0 },
+    { title: 'Zona ricca di crostacei', description: 'Le rive pullulano di crostacei e la tribù raccoglie una ricca provvista.', effect_type: 'gain_resources', effect_value: 10 },
+    { title: 'Lago pescoso', description: 'Il lago offre pesce in abbondanza e aumenta le scorte.', effect_type: 'gain_resources', effect_value: 5 },
+    { title: 'Caccia al bisonte andata male', description: 'La spedizione fallisce e la tribù perde risorse preziose.', effect_type: 'lose_resources', effect_value: 20 },
+    { title: 'Scoperta di stagno', description: 'Un nuovo stagno offre acqua e opportunità di raccolta.', effect_type: 'gain_resources', effect_value: 10 },
+    { title: 'Inondazione', description: 'Le acque sommergono campi e insediamenti, causando gravi perdite.', effect_type: 'lose_resources', effect_value: 20 },
+    { title: 'Cacciatori di teste', description: 'Un gruppo di guerrieri conquista un villaggio e lascia il territorio più fragile.', effect_type: 'info', effect_value: 0 },
+    { title: 'Assalto fortunato maggiore', description: 'L’assalto riesce a conquistare 3 ripari in un’unica stagione.', effect_type: 'info', effect_value: 0 }
   ];
 
   for (const event of eventCards) {
