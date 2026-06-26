@@ -152,6 +152,16 @@ function initDb() {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
 
+      CREATE TABLE IF NOT EXISTS settlements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_id INTEGER NOT NULL,
+        territory_id INTEGER NOT NULL,
+        level TEXT NOT NULL CHECK(level IN ('riparo', 'villaggio', 'citta')),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(player_id) REFERENCES players(id) ON DELETE CASCADE,
+        FOREIGN KEY(territory_id) REFERENCES territories(id) ON DELETE CASCADE
+      );
+
       CREATE TABLE IF NOT EXISTS game_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         player_id INTEGER,

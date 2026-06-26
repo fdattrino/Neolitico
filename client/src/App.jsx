@@ -46,6 +46,7 @@ function App() {
 
   const buyBelief = async (playerId, beliefCardId) => {
     try {
+      setError('');
       setSuccessMessage('');
       const response = await fetch(`${API_BASE}/players/${playerId}/buy-belief`, {
         method: 'POST',
@@ -64,6 +65,7 @@ function App() {
 
   const drawEvent = async (playerId) => {
     try {
+      setError('');
       setSuccessMessage('');
       const response = await fetch(`${API_BASE}/players/${playerId}/draw-event`, {
         method: 'POST',
@@ -86,6 +88,7 @@ function App() {
     }
 
     try {
+      setError('');
       setSuccessMessage('');
       const response = await fetch(`${API_BASE}/reset`, {
         method: 'POST'
@@ -103,6 +106,7 @@ function App() {
 
   const movePlayer = async (playerId, territoryId) => {
     try {
+      setError('');
       setSuccessMessage('');
       const response = await fetch(`${API_BASE}/players/${playerId}/move`, {
         method: 'POST',
@@ -114,9 +118,50 @@ function App() {
         throw new Error(result.error || 'Spostamento non riuscito');
       }
       setRefreshTrigger((value) => value + 1);
-      setSuccessMessage(`Spostamento completato.`);
+      setSuccessMessage('Spostamento completato.');
     } catch (err) {
       setError(err.message || 'Spostamento non riuscito');
+      throw err;
+    }
+  };
+
+  const buildSettlement = async (playerId) => {
+    try {
+      setError('');
+      setSuccessMessage('');
+      const response = await fetch(`${API_BASE}/players/${playerId}/build-settlement`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Costruzione non riuscita');
+      }
+      setRefreshTrigger((value) => value + 1);
+      setSuccessMessage('Riparo costruito con successo.');
+    } catch (err) {
+      setError(err.message || 'Costruzione non riuscita');
+      throw err;
+    }
+  };
+
+  const upgradeSettlement = async (settlementId) => {
+    try {
+      setError('');
+      setSuccessMessage('');
+      const response = await fetch(`${API_BASE}/settlements/${settlementId}/upgrade`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Miglioramento non riuscito');
+      }
+      setRefreshTrigger((value) => value + 1);
+      setSuccessMessage('Insediamento migliorato con successo.');
+    } catch (err) {
+      setError(err.message || 'Miglioramento non riuscito');
+      throw err;
     }
   };
 
@@ -145,7 +190,7 @@ function App() {
           <section className="panel">
             <PlayerPanel players={players} />
             <div className="divider" />
-            <MapBoard players={players} onMove={movePlayer} refreshTrigger={refreshTrigger} />
+            <MapBoard players={players} onMove={movePlayer} onBuild={buildSettlement} onUpgrade={upgradeSettlement} refreshTrigger={refreshTrigger} />
           </section>
           <section className="panel">
             <BeliefCards beliefs={beliefs} players={players} onBuy={buyBelief} />

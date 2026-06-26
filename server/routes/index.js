@@ -2,6 +2,11 @@ const express = require('express');
 const { run, get, all } = require('../db');
 
 const router = express.Router();
+const BUILD_COST = 5;
+const UPGRADE_COSTS = {
+  riparo: { nextLevel: 'villaggio', cost: 10 },
+  villaggio: { nextLevel: 'citta', cost: 20 }
+};
 
 function serializeLogRow(row) {
   let details = row.details;
@@ -13,6 +18,49 @@ function serializeLogRow(row) {
     }
   }
   return { ...row, details };
+}
+
+function serializeSettlementRow(row) {
+  return {
+    id: row.id,
+    player_id: row.player_id,
+    territory_id: row.territory_id,
+    level: row.level,
+    created_at: row.created_at,
+    player_name: row.player_name,
+    territory_name: row.territory_name
+  };
+}
+
+async function fetchSettlements() {
+  const settlements = await all(
+    `SELECT settlements.id, settlements.player_id, settlements.territory_id, settlements.level, settlements.created_at,
+            players.name AS player_name,
+            territories.name AS territory_name
+     FROM settlements
+     LEFT JOIN players ON players.id = settlements.player_id
+     LEFT JOIN territories ON territories.id = settlements.territory_id
+     ORDER BY territories.position_y, territories.position_x, settlements.id`
+  );
+
+  return settlements.map(serializeSettlementRow);
+}
+
+async function fetchTerritoriesWithSettlements() {
+  const territories = await all('SELECT * FROM territories ORDER BY position_y, position_x, id');
+  const settlements = await fetchSettlements();
+  const settlementsByTerritory = settlements.reduce((acc, settlement) => {
+    if (!acc[settlement.territory_id]) {
+      acc[settlement.territory_id] = [];
+    }
+    acc[settlement.territory_id].push(settlement);
+    return acc;
+  }, {});
+
+  return territories.map((territory) => ({
+    ...territory,
+    settlements: settlementsByTerritory[territory.id] || []
+  }));
 }
 
 router.get('/players', async (_req, res) => {
@@ -94,7 +142,7 @@ router.post('/players/:id/buy-belief', async (req, res) => {
 
 router.get('/territories', async (_req, res) => {
   try {
-    const territories = await all('SELECT * FROM territories ORDER BY position_y, position_x, id');
+    const territories = await fetchTerritoriesWithSettlements();
     res.json({ success: true, data: territories });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -130,6 +178,122 @@ router.post('/players/:id/move', async (req, res) => {
 
     const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [playerId]);
     res.json({ success: true, data: { player: updatedPlayer, territory } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/settlements', async (_req, res) => {
+  try {
+    const settlements = await fetchSettlements();
+    res.json({ success: true, data: settlements });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/players/:id/build-settlement', async (req, res) => {
+  try {
+    const playerId = Number(req.params.id);
+
+    if (Number.isNaN(playerId)) {
+      return res.status(400).json({ success: false, error: 'Valid player id is required.' });
+    }
+
+    const player = await get('SELECT * FROM players WHERE id = ?', [playerId]);
+    if (!player) {
+      return res.status(404).json({ success: false, error: 'Player not found.' });
+    }
+
+    if (player.resources < BUILD_COST) {
+      return res.status(400).json({ success: false, error: 'Risorse insufficienti: servono 5 risorse per costruire un riparo.' });
+    }
+
+    if (!player.current_territory_id) {
+      return res.status(400).json({ success: false, error: 'Player is not currently in a territory.' });
+    }
+
+    const territory = await get('SELECT * FROM territories WHERE id = ?', [player.current_territory_id]);
+    if (!territory) {
+      return res.status(404).json({ success: false, error: 'Current territory not found.' });
+    }
+
+    await run('UPDATE players SET resources = resources - ? WHERE id = ?', [BUILD_COST, playerId]);
+    const settlementResult = await run('INSERT INTO settlements (player_id, territory_id, level) VALUES (?, ?, ?)', [playerId, player.current_territory_id, 'riparo']);
+    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+      playerId,
+      `${player.name} costruisce un riparo nel territorio ${territory.name}.`,
+      JSON.stringify({ settlementId: settlementResult.lastID, level: 'riparo', territoryId: territory.id })
+    ]);
+
+    const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [playerId]);
+    const settlement = await get('SELECT settlements.id, settlements.player_id, settlements.territory_id, settlements.level, settlements.created_at, players.name AS player_name, territories.name AS territory_name FROM settlements LEFT JOIN players ON players.id = settlements.player_id LEFT JOIN territories ON territories.id = settlements.territory_id WHERE settlements.id = ?', [settlementResult.lastID]);
+    const settlements = await fetchSettlements();
+    const territories = await fetchTerritoriesWithSettlements();
+    res.json({
+      success: true,
+      data: {
+        player: updatedPlayer,
+        settlement: serializeSettlementRow(settlement),
+        settlements,
+        territories,
+        territory
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/settlements/:id/upgrade', async (req, res) => {
+  try {
+    const settlementId = Number(req.params.id);
+
+    if (Number.isNaN(settlementId)) {
+      return res.status(400).json({ success: false, error: 'Valid settlement id is required.' });
+    }
+
+    const settlement = await get('SELECT settlements.id, settlements.player_id, settlements.territory_id, settlements.level, settlements.created_at, players.name AS player_name, territories.name AS territory_name FROM settlements LEFT JOIN players ON players.id = settlements.player_id LEFT JOIN territories ON territories.id = settlements.territory_id WHERE settlements.id = ?', [settlementId]);
+    if (!settlement) {
+      return res.status(404).json({ success: false, error: 'Settlement not found.' });
+    }
+
+    const player = await get('SELECT * FROM players WHERE id = ?', [settlement.player_id]);
+    if (!player) {
+      return res.status(404).json({ success: false, error: 'Player not found.' });
+    }
+
+    const upgradePlan = UPGRADE_COSTS[settlement.level];
+
+    if (!upgradePlan) {
+      return res.status(400).json({ success: false, error: 'Questo insediamento e gia una citta e non puo essere migliorato oltre.' });
+    }
+
+    if (player.resources < upgradePlan.cost) {
+      return res.status(400).json({ success: false, error: `Risorse insufficienti: servono ${upgradePlan.cost} risorse per migliorare a ${upgradePlan.nextLevel}.` });
+    }
+
+    await run('UPDATE players SET resources = resources - ? WHERE id = ?', [upgradePlan.cost, settlement.player_id]);
+    await run('UPDATE settlements SET level = ? WHERE id = ?', [upgradePlan.nextLevel, settlementId]);
+    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+      settlement.player_id,
+      `${player.name} migliora un ${settlement.level} in ${upgradePlan.nextLevel} nel territorio ${settlement.territory_name}.`,
+      JSON.stringify({ settlementId, fromLevel: settlement.level, toLevel: upgradePlan.nextLevel })
+    ]);
+
+    const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [player.id]);
+    const updatedSettlement = await get('SELECT settlements.id, settlements.player_id, settlements.territory_id, settlements.level, settlements.created_at, players.name AS player_name, territories.name AS territory_name FROM settlements LEFT JOIN players ON players.id = settlements.player_id LEFT JOIN territories ON territories.id = settlements.territory_id WHERE settlements.id = ?', [settlementId]);
+    const settlements = await fetchSettlements();
+    const territories = await fetchTerritoriesWithSettlements();
+    res.json({
+      success: true,
+      data: {
+        player: updatedPlayer,
+        settlement: serializeSettlementRow(updatedSettlement),
+        settlements,
+        territories
+      }
+    });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -207,6 +371,7 @@ router.post('/reset', async (_req, res) => {
 
     await run('DELETE FROM player_beliefs');
     await run('DELETE FROM game_log');
+    await run('DELETE FROM settlements');
     await run('UPDATE players SET resources = 10, current_territory_id = CASE name WHEN ? THEN ? WHEN ? THEN ? WHEN ? THEN ? ELSE NULL END', ['Ayla', forest?.id ?? null, 'Bram', plain?.id ?? null, 'Iria', cave?.id ?? null]);
 
     const players = await all('SELECT players.id, players.name, players.tribe, players.resources, players.current_territory_id, territories.name AS current_territory_name FROM players LEFT JOIN territories ON territories.id = players.current_territory_id ORDER BY players.id');

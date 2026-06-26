@@ -5,6 +5,7 @@ async function seed() {
 
   await run('DELETE FROM player_beliefs');
   await run('DELETE FROM game_log');
+  await run('DELETE FROM settlements');
   await run('DELETE FROM players');
   await run('DELETE FROM territories');
   await run('DELETE FROM belief_cards');

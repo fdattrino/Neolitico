@@ -173,6 +173,21 @@ button:disabled {
   padding: 0.45rem 0.6rem;
 }
 
+.settlement-list {
+  margin-top: 0.6rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.settlement-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  color: #24553b;
+}
+
 .card-list {
   display: grid;
   gap: 0.8rem;

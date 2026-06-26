@@ -2,22 +2,36 @@ import { useEffect, useState } from 'react';
 
 const API_BASE = 'http://localhost:3000/api';
 
-function MapBoard({ players, onMove, refreshTrigger }) {
+function MapBoard({ players, onMove, onBuild, onUpgrade, refreshTrigger }) {
   const [territories, setTerritories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedTerritoryIds, setSelectedTerritoryIds] = useState({});
 
   useEffect(() => {
-    const loadTerritories = async () => {
+    const loadMapData = async () => {
       try {
         setLoading(true);
-        const response = await fetch(`${API_BASE}/territories`);
-        const result = await response.json();
-        if (!response.ok) {
-          throw new Error(result.error || 'Impossibile caricare la mappa');
+        const [territoriesResponse, settlementsResponse] = await Promise.all([fetch(`${API_BASE}/territories`), fetch(`${API_BASE}/settlements`)]);
+        const territoriesResult = await territoriesResponse.json();
+        const settlementsResult = await settlementsResponse.json();
+
+        if (!territoriesResponse.ok || !settlementsResponse.ok) {
+          throw new Error('Impossibile caricare la mappa');
         }
-        setTerritories(result.data || []);
+
+        const territoriesWithSettlements = (territoriesResult.data || []).map((territory) => ({
+          ...territory,
+          settlements: territory.settlements || []
+        }));
+
+        const settlementsById = new Map((settlementsResult.data || []).map((settlement) => [settlement.id, settlement]));
+        setTerritories(
+          territoriesWithSettlements.map((territory) => ({
+            ...territory,
+            settlements: territory.settlements.map((settlement) => settlementsById.get(settlement.id) || settlement)
+          }))
+        );
         setError('');
       } catch (err) {
         setError(err.message || 'Impossibile caricare la mappa');
@@ -26,7 +40,7 @@ function MapBoard({ players, onMove, refreshTrigger }) {
       }
     };
 
-    loadTerritories();
+    loadMapData();
   }, [refreshTrigger]);
 
   const playersByTerritory = territories.reduce((acc, territory) => {
@@ -47,6 +61,24 @@ function MapBoard({ players, onMove, refreshTrigger }) {
       return;
     }
     await onMove(playerId, Number(selectedTerritoryId));
+  };
+
+  const handleBuild = async (playerId) => {
+    try {
+      setError('');
+      await onBuild(playerId);
+    } catch (err) {
+      setError(err.message || 'Costruzione non riuscita');
+    }
+  };
+
+  const handleUpgrade = async (settlementId) => {
+    try {
+      setError('');
+      await onUpgrade(settlementId);
+    } catch (err) {
+      setError(err.message || 'Miglioramento non riuscito');
+    }
   };
 
   return (
@@ -72,6 +104,20 @@ function MapBoard({ players, onMove, refreshTrigger }) {
                     <span className="hint">Nessun giocatore</span>
                   )}
                 </div>
+                <div className="settlement-list">
+                  {(territory.settlements || []).length > 0 ? (
+                    territory.settlements.map((settlement) => (
+                      <div key={settlement.id} className="settlement-item">
+                        <span>{settlement.player_name}: {settlement.level}</span>
+                        <button onClick={() => handleUpgrade(settlement.id)} disabled={settlement.level === 'citta'}>
+                          Migliora
+                        </button>
+                      </div>
+                    ))
+                  ) : (
+                    <span className="hint">Nessun insediamento</span>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -93,6 +139,7 @@ function MapBoard({ players, onMove, refreshTrigger }) {
                   ))}
                 </select>
                 <button onClick={() => handleMove(player.id)}>Sposta</button>
+                <button onClick={() => handleBuild(player.id)}>Costruisci riparo</button>
               </div>
             ))}
           </div>
