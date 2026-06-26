@@ -1,0 +1,157 @@
+const express = require('express');
+const { run, get, all } = require('../db');
+
+const router = express.Router();
+
+function serializeLogRow(row) {
+  let details = row.details;
+  if (typeof details === 'string') {
+    try {
+      details = JSON.parse(details);
+    } catch (_err) {
+      details = details;
+    }
+  }
+  return { ...row, details };
+}
+
+router.get('/players', async (_req, res) => {
+  try {
+    const players = await all('SELECT * FROM players ORDER BY id');
+    res.json({ success: true, data: players });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/beliefs', async (_req, res) => {
+  try {
+    const beliefs = await all('SELECT * FROM belief_cards ORDER BY id');
+    res.json({ success: true, data: beliefs });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/players/:id/buy-belief', async (req, res) => {
+  try {
+    const playerId = Number(req.params.id);
+    const beliefCardId = Number(req.body.belief_card_id ?? req.body.beliefCardId);
+
+    if (!beliefCardId || Number.isNaN(playerId)) {
+      return res.status(400).json({ success: false, error: 'Valid player id and belief card id are required.' });
+    }
+
+    const player = await get('SELECT * FROM players WHERE id = ?', [playerId]);
+    const beliefCard = await get('SELECT * FROM belief_cards WHERE id = ?', [beliefCardId]);
+
+    if (!player) {
+      return res.status(404).json({ success: false, error: 'Player not found.' });
+    }
+
+    if (!beliefCard) {
+      return res.status(404).json({ success: false, error: 'Belief card not found.' });
+    }
+
+    const existing = await get('SELECT id FROM player_beliefs WHERE player_id = ? AND belief_card_id = ?', [playerId, beliefCardId]);
+    if (existing) {
+      return res.status(409).json({ success: false, error: 'Player already owns this belief.' });
+    }
+
+    if (player.resources < beliefCard.cost) {
+      return res.status(400).json({ success: false, error: 'Not enough resources to buy this belief.' });
+    }
+
+    await run('UPDATE players SET resources = resources - ? WHERE id = ?', [beliefCard.cost, playerId]);
+    await run('INSERT INTO player_beliefs (player_id, belief_card_id) VALUES (?, ?)', [playerId, beliefCardId]);
+    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+      playerId,
+      `Bought belief: ${beliefCard.name}`,
+      JSON.stringify({ beliefCardId, cost: beliefCard.cost })
+    ]);
+
+    const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [playerId]);
+    res.json({ success: true, data: { player: updatedPlayer, belief: beliefCard } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/events', async (_req, res) => {
+  try {
+    const events = await all('SELECT * FROM event_cards ORDER BY id');
+    res.json({ success: true, data: events });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/players/:id/draw-event', async (req, res) => {
+  try {
+    const playerId = Number(req.params.id);
+    const eventCardId = req.body.event_card_id ?? req.body.eventCardId;
+
+    if (Number.isNaN(playerId)) {
+      return res.status(400).json({ success: false, error: 'Valid player id is required.' });
+    }
+
+    const player = await get('SELECT * FROM players WHERE id = ?', [playerId]);
+    if (!player) {
+      return res.status(404).json({ success: false, error: 'Player not found.' });
+    }
+
+    let eventCard;
+    if (eventCardId) {
+      eventCard = await get('SELECT * FROM event_cards WHERE id = ?', [Number(eventCardId)]);
+    } else {
+      eventCard = await get('SELECT * FROM event_cards ORDER BY RANDOM() LIMIT 1');
+    }
+
+    if (!eventCard) {
+      return res.status(404).json({ success: false, error: 'No event card available.' });
+    }
+
+    let newResources = player.resources;
+    if (eventCard.effect_type === 'gain_resources') {
+      newResources = player.resources + eventCard.effect_value;
+    } else if (eventCard.effect_type === 'lose_resources') {
+      newResources = Math.max(0, player.resources - eventCard.effect_value);
+    }
+
+    await run('UPDATE players SET resources = ? WHERE id = ?', [newResources, playerId]);
+    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+      playerId,
+      `Drew event: ${eventCard.title}`,
+      JSON.stringify({ eventCardId: eventCard.id, effectType: eventCard.effect_type, effectValue: eventCard.effect_value })
+    ]);
+
+    const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [playerId]);
+    res.json({ success: true, data: { player: updatedPlayer, event: eventCard } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/log', async (_req, res) => {
+  try {
+    const logs = await all('SELECT * FROM game_log ORDER BY id DESC');
+    res.json({ success: true, data: logs.map(serializeLogRow) });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/reset', async (_req, res) => {
+  try {
+    await run('DELETE FROM player_beliefs');
+    await run('DELETE FROM game_log');
+    await run('UPDATE players SET resources = 10');
+
+    const players = await all('SELECT * FROM players ORDER BY id');
+    res.json({ success: true, data: { message: 'Game reset successfully.', players } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+module.exports = router;
