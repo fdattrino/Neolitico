@@ -1,49 +1,20 @@
 import { useEffect, useState } from 'react';
 
-const API_BASE = 'http://localhost:3000/api';
-
-function MapBoard({ players, currentPlayerId, onMove, onBuild, onUpgrade, refreshTrigger }) {
-  const [territories, setTerritories] = useState([]);
-  const [loading, setLoading] = useState(true);
+function MapBoard({ players, territories, developments, currentPlayerId, onMove, onBattle }) {
   const [error, setError] = useState('');
   const [selectedTerritoryIds, setSelectedTerritoryIds] = useState({});
+  const [moveSelections, setMoveSelections] = useState({});
   const activePlayerId = Number(currentPlayerId);
   const normalizeId = (value) => Number(value);
 
-  useEffect(() => {
-    const loadMapData = async () => {
-      try {
-        setLoading(true);
-        const [territoriesResponse, settlementsResponse] = await Promise.all([fetch(`${API_BASE}/territories`), fetch(`${API_BASE}/settlements`)]);
-        const territoriesResult = await territoriesResponse.json();
-        const settlementsResult = await settlementsResponse.json();
-
-        if (!territoriesResponse.ok || !settlementsResponse.ok) {
-          throw new Error('Impossibile caricare la mappa');
-        }
-
-        const territoriesWithSettlements = (territoriesResult.data || []).map((territory) => ({
-          ...territory,
-          settlements: territory.settlements || []
-        }));
-
-        const settlementsById = new Map((settlementsResult.data || []).map((settlement) => [settlement.id, settlement]));
-        setTerritories(
-          territoriesWithSettlements.map((territory) => ({
-            ...territory,
-            settlements: territory.settlements.map((settlement) => settlementsById.get(settlement.id) || settlement)
-          }))
-        );
-        setError('');
-      } catch (err) {
-        setError(err.message || 'Impossibile caricare la mappa');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadMapData();
-  }, [refreshTrigger]);
+  const developmentsByTerritory = developments.reduce((acc, development) => {
+    const territoryId = normalizeId(development.territory_id);
+    if (!acc[territoryId]) {
+      acc[territoryId] = [];
+    }
+    acc[territoryId].push(development);
+    return acc;
+  }, {});
 
   const playersByTerritory = territories.reduce((acc, territory) => {
     acc[territory.id] = [];
@@ -58,13 +29,6 @@ function MapBoard({ players, currentPlayerId, onMove, onBuild, onUpgrade, refres
     }
   });
 
-  const currentSettlementByPlayer = players.reduce((acc, player) => {
-    const territory = territories.find((item) => normalizeId(item.id) === normalizeId(player.current_territory_id));
-    const currentSettlement = territory?.settlements?.find((settlement) => normalizeId(settlement.player_id) === normalizeId(player.id)) || null;
-    acc[player.id] = currentSettlement;
-    return acc;
-  }, {});
-
   const getReachableTerritories = (player) => {
     const currentTerritory = territories.find((territory) => normalizeId(territory.id) === normalizeId(player.current_territory_id));
     if (!currentTerritory) {
@@ -76,6 +40,13 @@ function MapBoard({ players, currentPlayerId, onMove, onBuild, onUpgrade, refres
       return distance === 1;
     });
   };
+
+  const getCurrentDevelopment = (player) => (
+    developments.find(
+      (development) => normalizeId(development.player_id) === normalizeId(player.id)
+        && normalizeId(development.territory_id) === normalizeId(player.current_territory_id)
+    ) || null
+  );
 
   useEffect(() => {
     if (territories.length === 0 || players.length === 0 || Number.isNaN(activePlayerId)) {
@@ -103,6 +74,20 @@ function MapBoard({ players, currentPlayerId, onMove, onBuild, onUpgrade, refres
 
       return { ...current, [activePlayer.id]: String(reachableTerritories[0].id) };
     });
+
+    setMoveSelections((current) => {
+      const development = getCurrentDevelopment(activePlayer);
+      const maxShelters = Number(development?.shelters ?? 0);
+      const maxVillages = Number(development?.villages ?? 0);
+      const currentSelection = current[activePlayer.id] || {};
+      return {
+        ...current,
+        [activePlayer.id]: {
+          sheltersToMove: Math.min(Number(currentSelection.sheltersToMove ?? 0), maxShelters),
+          villagesToMove: Math.min(Number(currentSelection.villagesToMove ?? 0), maxVillages)
+        }
+      };
+    });
   }, [territories, players, activePlayerId]);
 
   const handleMove = async (playerId) => {
@@ -110,150 +95,164 @@ function MapBoard({ players, currentPlayerId, onMove, onBuild, onUpgrade, refres
     if (!selectedTerritoryId) {
       return;
     }
-    await onMove(playerId, Number(selectedTerritoryId));
-  };
 
-  const handleBuild = async (playerId) => {
+    const selection = moveSelections[playerId] || {};
+    const sheltersToMove = Number(selection.sheltersToMove ?? 0);
+    const villagesToMove = Number(selection.villagesToMove ?? 0);
+
     try {
       setError('');
-      await onBuild(playerId);
+      await onMove(playerId, Number(selectedTerritoryId), sheltersToMove, villagesToMove);
     } catch (err) {
-      setError(err.message || 'Costruzione non riuscita');
+      setError(err.message || 'Spostamento non riuscito');
     }
   };
 
-  const handleUpgrade = async (settlementId) => {
+  const handleBattle = async (territoryId) => {
     try {
       setError('');
-      await onUpgrade(settlementId);
+      await onBattle(territoryId);
     } catch (err) {
-      setError(err.message || 'Miglioramento non riuscito');
+      setError(err.message || 'Battaglia non riuscita');
     }
   };
 
-  const getSettlementAction = (player) => {
-    const currentSettlement = currentSettlementByPlayer[player.id];
-    const isActivePlayer = Number(player.id) === activePlayerId;
-
-    if (!isActivePlayer) {
-      return {
-        label: 'In attesa del turno',
-        disabled: true,
-        action: () => {}
-      };
+  const canBattleInTerritory = (territory) => {
+    if (Number(territory.prey_remaining ?? 0) !== 0) {
+      return false;
     }
 
-    if (!currentSettlement) {
-      return {
-        label: 'Costruisci riparo',
-        disabled: false,
-        action: () => handleBuild(player.id)
-      };
+    const territoryDevelopments = developmentsByTerritory[territory.id] || [];
+    if (territoryDevelopments.length < 2) {
+      return false;
     }
 
-    if (currentSettlement.level === 'riparo') {
-      return {
-        label: 'Migliora a villaggio',
-        disabled: false,
-        action: () => handleUpgrade(currentSettlement.id)
-      };
-    }
+    const [firstDevelopment, secondDevelopment] = territoryDevelopments;
+    const bothHaveShelters = Number(firstDevelopment.shelters) > 0 && Number(secondDevelopment.shelters) > 0;
+    const bothHaveVillages = Number(firstDevelopment.villages) > 0 && Number(secondDevelopment.villages) > 0;
 
-    if (currentSettlement.level === 'villaggio') {
-      return {
-        label: 'Migliora a citta',
-        disabled: false,
-        action: () => handleUpgrade(currentSettlement.id)
-      };
-    }
-
-    return {
-      label: 'Citta completa',
-      disabled: true,
-      action: () => {}
-    };
+    return bothHaveShelters || bothHaveVillages;
   };
 
   return (
     <div className="map-board">
       <h2>Mappa dei territori</h2>
       {error && <p className="alert">{error}</p>}
-      {loading ? (
-        <p className="hint">Caricamento mappa…</p>
-      ) : (
-        <>
-          <div className="map-grid">
-            {territories.map((territory) => (
-              <div key={territory.id} className="territory-cell">
-                <h3>{territory.name}</h3>
-                <span className="territory-type">{territory.terrain_type}</span>
-                <p className="territory-description">{territory.description}</p>
-                <div className="territory-players">
-                  {(playersByTerritory[territory.id] || []).length > 0 ? (
-                    playersByTerritory[territory.id].map((playerName) => (
-                      <span key={`${territory.id}-${playerName}`} className="player-chip">{playerName}</span>
-                    ))
-                  ) : (
-                    <span className="hint">Nessun giocatore</span>
-                  )}
-                </div>
-                <div className="settlement-list">
-                  {(territory.settlements || []).length > 0 ? (
-                    territory.settlements.map((settlement) => (
-                      <div key={settlement.id} className="settlement-item">
-                        <span>{settlement.player_name}: {settlement.level}</span>
-                        <button onClick={() => handleUpgrade(settlement.id)} disabled={settlement.level === 'citta' || Number(settlement.player_id) !== activePlayerId}>
-                          {settlement.level === 'citta' ? 'Citta completa' : Number(settlement.player_id) !== activePlayerId ? 'In attesa del turno' : 'Migliora'}
-                        </button>
-                      </div>
-                    ))
-                  ) : (
-                    <span className="hint">Nessun insediamento</span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
 
-          <div className="move-controls">
-            {players.map((player) => (
-              (() => {
-                const settlementAction = getSettlementAction(player);
-                const reachableTerritories = getReachableTerritories(player);
-                const isActivePlayer = Number(player.id) === activePlayerId;
-                const hasMovedThisTurn = Number(player.has_moved_this_turn) === 1;
-                const moveDisabled = !isActivePlayer || hasMovedThisTurn || reachableTerritories.length === 0 || !selectedTerritoryIds[player.id];
-
-                return (
-                  <div key={player.id} className="move-control">
-                    <strong>{player.name}</strong>
-                    <span>{player.current_territory_name || 'Sconosciuto'}</span>
-                    <select
-                      value={selectedTerritoryIds[player.id] || ''}
-                      onChange={(event) => setSelectedTerritoryIds((current) => ({ ...current, [player.id]: event.target.value }))}
-                      disabled={!isActivePlayer || hasMovedThisTurn || reachableTerritories.length === 0}
-                    >
-                      <option value="">{reachableTerritories.length > 0 ? 'Seleziona territorio' : 'Nessun territorio adiacente'}</option>
-                      {reachableTerritories.map((territory) => (
-                        <option key={territory.id} value={territory.id}>
-                          {territory.name}
-                        </option>
-                      ))}
-                    </select>
-                    <button onClick={() => handleMove(player.id)} disabled={moveDisabled}>Sposta</button>
-                    <button onClick={settlementAction.action} disabled={settlementAction.disabled}>
-                      {settlementAction.label}
-                    </button>
-                    {!isActivePlayer && <span className="turn-waiting">In attesa del turno</span>}
-                    {isActivePlayer && hasMovedThisTurn && <span className="turn-waiting">Spostamento già effettuato</span>}
-                    {isActivePlayer && reachableTerritories.length === 0 && <span className="turn-waiting">Nessun territorio adiacente disponibile</span>}
+      <div className="map-grid">
+        {territories.map((territory) => (
+          <div key={territory.id} className="territory-cell">
+            <div className="territory-head">
+              <h3>{territory.name}</h3>
+              <span className="territory-type">{territory.terrain_type}</span>
+            </div>
+            <p className="territory-description">{territory.description}</p>
+            <p className="territory-prey">Prede: {territory.prey_remaining} / {territory.total_prey}</p>
+            <div className="territory-players">
+              {(playersByTerritory[territory.id] || []).length > 0 ? (
+                playersByTerritory[territory.id].map((playerName) => (
+                  <span key={`${territory.id}-${playerName}`} className="player-chip">{playerName}</span>
+                ))
+              ) : (
+                <span className="hint">Nessun giocatore</span>
+              )}
+            </div>
+            <div className="development-list">
+              {(developmentsByTerritory[territory.id] || []).length > 0 ? (
+                developmentsByTerritory[territory.id].map((development) => (
+                  <div key={development.id} className="development-item">
+                    <strong>{development.player_name}</strong>
+                    <span>{development.shelters} ripari, {development.villages} villaggi, {development.cities} città</span>
                   </div>
-                );
-              })()
-            ))}
+                ))
+              ) : (
+                <span className="hint">Nessun insediamento</span>
+              )}
+            </div>
+            {canBattleInTerritory(territory) && (
+              <div className="territory-actions">
+                <button onClick={() => handleBattle(territory.id)}>Battaglia</button>
+              </div>
+            )}
           </div>
-        </>
-      )}
+        ))}
+      </div>
+
+      <div className="move-controls">
+        {players.map((player) => {
+          const reachableTerritories = getReachableTerritories(player);
+          const currentDevelopment = getCurrentDevelopment(player);
+          const maxShelters = Number(currentDevelopment?.shelters ?? 0);
+          const maxVillages = Number(currentDevelopment?.villages ?? 0);
+          const selection = moveSelections[player.id] || { sheltersToMove: 0, villagesToMove: 0 };
+          const isActivePlayer = Number(player.id) === activePlayerId;
+          const hasMovedThisTurn = Number(player.has_moved_this_turn) === 1;
+          const moveDisabled = !isActivePlayer || hasMovedThisTurn || reachableTerritories.length === 0 || !selectedTerritoryIds[player.id];
+
+          return (
+            <div key={player.id} className="move-control">
+              <strong>{player.name}</strong>
+              <span>{player.current_territory_name || 'Sconosciuto'}</span>
+              <select
+                value={selectedTerritoryIds[player.id] || ''}
+                onChange={(event) => setSelectedTerritoryIds((current) => ({ ...current, [player.id]: event.target.value }))}
+                disabled={!isActivePlayer || hasMovedThisTurn || reachableTerritories.length === 0}
+              >
+                <option value="">{reachableTerritories.length > 0 ? 'Seleziona territorio' : 'Nessun territorio adiacente'}</option>
+                {reachableTerritories.map((territory) => (
+                  <option key={territory.id} value={territory.id}>
+                    {territory.name}
+                  </option>
+                ))}
+              </select>
+              <label className="move-transfer">
+                <span>Ripari da portare</span>
+                <select
+                  value={selection.sheltersToMove}
+                  onChange={(event) => setMoveSelections((current) => ({
+                    ...current,
+                    [player.id]: {
+                      sheltersToMove: Number(event.target.value),
+                      villagesToMove: Number(current[player.id]?.villagesToMove ?? selection.villagesToMove ?? 0)
+                    }
+                  }))}
+                  disabled={!isActivePlayer || hasMovedThisTurn || maxShelters === 0}
+                >
+                  {Array.from({ length: maxShelters + 1 }, (_, index) => (
+                    <option key={`shelters-${player.id}-${index}`} value={index}>
+                      {index}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="move-transfer">
+                <span>Villaggi da portare</span>
+                <select
+                  value={selection.villagesToMove}
+                  onChange={(event) => setMoveSelections((current) => ({
+                    ...current,
+                    [player.id]: {
+                      sheltersToMove: Number(current[player.id]?.sheltersToMove ?? selection.sheltersToMove ?? 0),
+                      villagesToMove: Number(event.target.value)
+                    }
+                  }))}
+                  disabled={!isActivePlayer || hasMovedThisTurn || maxVillages === 0}
+                >
+                  {Array.from({ length: maxVillages + 1 }, (_, index) => (
+                    <option key={`villages-${player.id}-${index}`} value={index}>
+                      {index}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button onClick={() => handleMove(player.id)} disabled={moveDisabled}>Sposta</button>
+              {!isActivePlayer && <span className="turn-waiting">In attesa del turno</span>}
+              {isActivePlayer && hasMovedThisTurn && <span className="turn-waiting">Spostamento già effettuato</span>}
+              {isActivePlayer && reachableTerritories.length === 0 && <span className="turn-waiting">Nessun territorio adiacente disponibile</span>}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

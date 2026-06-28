@@ -1,33 +1,7 @@
-import { useEffect, useState } from 'react';
-
-const API_BASE = 'http://localhost:3000/api';
-
-function GameLog({ refreshTrigger }) {
-  const [log, setLog] = useState([]);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    const loadLog = async () => {
-      try {
-        const response = await fetch(`${API_BASE}/log`);
-        const result = await response.json();
-        if (!response.ok) {
-          throw new Error(result.error || 'Impossibile caricare il diario');
-        }
-        setLog(result.data || []);
-        setError('');
-      } catch (err) {
-        setError(err.message || 'Impossibile caricare il diario');
-      }
-    };
-
-    loadLog();
-  }, [refreshTrigger]);
-
+function GameLog({ log = [] }) {
   return (
     <div>
       <h2>Diario della partita</h2>
-      {error && <p className="alert">{error}</p>}
       {log.length === 0 ? (
         <p className="hint">Nessuna azione registrata</p>
       ) : (

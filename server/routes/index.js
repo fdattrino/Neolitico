@@ -1,12 +1,11 @@
 const express = require('express');
 const { run, get, all } = require('../db');
+const { resetGameSession } = require('../gameSetup');
 
 const router = express.Router();
-const BUILD_COST = 5;
-const UPGRADE_COSTS = {
-  riparo: { nextLevel: 'villaggio', cost: 10 },
-  villaggio: { nextLevel: 'citta', cost: 20 }
-};
+
+const BUILD_SHELTER_COST = 5;
+const FOUND_CITY_COST = 40;
 const NOT_CURRENT_TURN_ERROR = 'Non è il turno di questo giocatore.';
 const TERRITORY_RESOURCE_BONUSES = {
   Foresta: 8,
@@ -19,10 +18,15 @@ const TERRITORY_RESOURCE_BONUSES = {
   Grotta: 5,
   Valle: 8
 };
-const SETTLEMENT_RESOURCE_BONUSES = {
-  riparo: 2,
-  villaggio: 5,
-  citta: 10
+const DEVELOPMENT_RESOURCE_BONUSES = {
+  shelter: 2,
+  village: 5,
+  city: 10
+};
+const MAINTENANCE_COSTS = {
+  shelters: 5,
+  villages: 10,
+  cities: 40
 };
 
 function serializeLogRow(row) {
@@ -31,25 +35,28 @@ function serializeLogRow(row) {
     try {
       details = JSON.parse(details);
     } catch (_err) {
-      details = details;
+      details = row.details;
     }
   }
+
   return { ...row, details };
 }
 
-function serializeSettlementRow(row) {
+function serializeDevelopmentRow(row) {
   return {
     id: row.id,
     player_id: row.player_id,
     territory_id: row.territory_id,
-    level: row.level,
+    shelters: Number(row.shelters ?? 0),
+    villages: Number(row.villages ?? 0),
+    cities: Number(row.cities ?? 0),
     created_at: row.created_at,
     player_name: row.player_name,
     territory_name: row.territory_name
   };
 }
 
-async function fetchSettlements() {
+async function fetchLegacySettlements() {
   const settlements = await all(
     `SELECT settlements.id, settlements.player_id, settlements.territory_id, settlements.level, settlements.created_at,
             players.name AS player_name,
@@ -60,13 +67,47 @@ async function fetchSettlements() {
      ORDER BY territories.position_y, territories.position_x, settlements.id`
   );
 
-  return settlements.map(serializeSettlementRow);
+  return settlements.map((row) => ({
+    id: row.id,
+    player_id: row.player_id,
+    territory_id: row.territory_id,
+    level: row.level,
+    created_at: row.created_at,
+    player_name: row.player_name,
+    territory_name: row.territory_name
+  }));
 }
 
-async function fetchTerritoriesWithSettlements() {
+async function fetchDevelopments() {
+  const developments = await all(
+    `SELECT territory_development.id, territory_development.player_id, territory_development.territory_id,
+            territory_development.shelters, territory_development.villages, territory_development.cities,
+            territory_development.created_at,
+            players.name AS player_name,
+            territories.name AS territory_name,
+            territories.position_y,
+            territories.position_x
+     FROM territory_development
+     LEFT JOIN players ON players.id = territory_development.player_id
+     LEFT JOIN territories ON territories.id = territory_development.territory_id
+     ORDER BY territories.position_y, territories.position_x, territory_development.id`
+  );
+
+  return developments.map(serializeDevelopmentRow);
+}
+
+async function fetchTerritoriesWithDevelopments() {
   const territories = await all('SELECT * FROM territories ORDER BY position_y, position_x, id');
-  const settlements = await fetchSettlements();
-  const settlementsByTerritory = settlements.reduce((acc, settlement) => {
+  const developments = await fetchDevelopments();
+  const legacySettlements = await fetchLegacySettlements();
+  const developmentsByTerritory = developments.reduce((acc, development) => {
+    if (!acc[development.territory_id]) {
+      acc[development.territory_id] = [];
+    }
+    acc[development.territory_id].push(development);
+    return acc;
+  }, {});
+  const settlementsByTerritory = legacySettlements.reduce((acc, settlement) => {
     if (!acc[settlement.territory_id]) {
       acc[settlement.territory_id] = [];
     }
@@ -76,42 +117,73 @@ async function fetchTerritoriesWithSettlements() {
 
   return territories.map((territory) => ({
     ...territory,
+    total_prey: Number(territory.total_prey ?? 0),
+    prey_remaining: Number(territory.prey_remaining ?? 0),
+    developments: developmentsByTerritory[territory.id] || [],
     settlements: settlementsByTerritory[territory.id] || []
   }));
 }
 
-async function fetchPlayerSettlementsByLevel(playerId, level, limit) {
-  return all(
-    `SELECT id, territory_id, level
-     FROM settlements
-     WHERE player_id = ? AND level = ?
-     ORDER BY id
-     LIMIT ?`,
-    [playerId, level, limit]
-  );
-}
-
-async function deleteSettlementsByIds(ids) {
-  for (const settlementId of ids) {
-    await run('DELETE FROM settlements WHERE id = ?', [settlementId]);
-  }
-}
-
-async function fetchPlayerSettlementInTerritory(playerId, territoryId) {
+async function fetchPlayerDevelopmentInTerritory(playerId, territoryId) {
   if (!territoryId) {
     return null;
   }
 
-  return get(
-    `SELECT settlements.id, settlements.player_id, settlements.territory_id, settlements.level, settlements.created_at,
+  const row = await get(
+    `SELECT territory_development.id, territory_development.player_id, territory_development.territory_id,
+            territory_development.shelters, territory_development.villages, territory_development.cities,
+            territory_development.created_at,
             players.name AS player_name,
             territories.name AS territory_name
-     FROM settlements
-     LEFT JOIN players ON players.id = settlements.player_id
-     LEFT JOIN territories ON territories.id = settlements.territory_id
-     WHERE settlements.player_id = ? AND settlements.territory_id = ?`,
+     FROM territory_development
+     LEFT JOIN players ON players.id = territory_development.player_id
+     LEFT JOIN territories ON territories.id = territory_development.territory_id
+     WHERE territory_development.player_id = ? AND territory_development.territory_id = ?`,
     [playerId, territoryId]
   );
+
+  return row ? serializeDevelopmentRow(row) : null;
+}
+
+async function ensureDevelopmentRecord(playerId, territoryId) {
+  let development = await fetchPlayerDevelopmentInTerritory(playerId, territoryId);
+  if (development) {
+    return development;
+  }
+
+  const insertResult = await run(
+    'INSERT INTO territory_development (player_id, territory_id, shelters, villages, cities) VALUES (?, ?, 0, 0, 0)',
+    [playerId, territoryId]
+  );
+
+  development = await fetchPlayerDevelopmentInTerritory(playerId, territoryId);
+  if (development) {
+    return development;
+  }
+
+  return {
+    id: insertResult.lastID,
+    player_id: playerId,
+    territory_id: territoryId,
+    shelters: 0,
+    villages: 0,
+    cities: 0,
+    created_at: null
+  };
+}
+
+function getDevelopmentBonus(development) {
+  if (!development) {
+    return 0;
+  }
+
+  return (Number(development.shelters ?? 0) * DEVELOPMENT_RESOURCE_BONUSES.shelter)
+    + (Number(development.villages ?? 0) * DEVELOPMENT_RESOURCE_BONUSES.village)
+    + (Number(development.cities ?? 0) * DEVELOPMENT_RESOURCE_BONUSES.city);
+}
+
+function rollDie() {
+  return Math.floor(Math.random() * 6) + 1;
 }
 
 async function fetchGameState() {
@@ -126,6 +198,25 @@ async function fetchGameState() {
 
 async function fetchAyla() {
   return get('SELECT id, name FROM players WHERE name = ? ORDER BY id LIMIT 1', ['Ayla']);
+}
+
+async function fetchPlayersWithTerritories() {
+  return all(
+    `SELECT players.*, territories.name AS current_territory_name
+     FROM players
+     LEFT JOIN territories ON territories.id = players.current_territory_id
+     ORDER BY players.id`,
+    []
+  );
+}
+
+async function fetchPlayersForTurnOrder() {
+  return all(
+    `SELECT id, name
+     FROM players
+     ORDER BY id`,
+    []
+  );
 }
 
 async function resetGameStateToAyla(round = 1) {
@@ -177,9 +268,189 @@ async function requireCurrentPlayer(playerId, res) {
   return gameState;
 }
 
+async function getPlayerWithTerritory(playerId) {
+  return get(
+    `SELECT players.*, territories.name AS current_territory_name
+     FROM players
+     LEFT JOIN territories ON territories.id = players.current_territory_id
+     WHERE players.id = ?`,
+    [playerId]
+  );
+}
+
+async function buildSharedPayload(playerId) {
+  const [player, territories, developments, gameState, log] = await Promise.all([
+    playerId ? getPlayerWithTerritory(playerId) : Promise.resolve(null),
+    fetchTerritoriesWithDevelopments(),
+    fetchDevelopments(),
+    ensureValidGameState(),
+    all('SELECT * FROM game_log ORDER BY id DESC')
+  ]);
+
+  return {
+    player,
+    territories,
+    developments,
+    gameState,
+    log: log.map(serializeLogRow)
+  };
+}
+
+async function loseDevelopments(playerId, fieldName, amount) {
+  if (amount <= 0) {
+    return { lost: 0, touchedTerritories: [] };
+  }
+
+  const developments = await all(
+    `SELECT id, territory_id, shelters, villages, cities
+     FROM territory_development
+     WHERE player_id = ? AND ${fieldName} > 0
+     ORDER BY territory_id, id`,
+    [playerId]
+  );
+
+  let remaining = amount;
+  let lost = 0;
+  const touchedTerritories = [];
+
+  for (const development of developments) {
+    if (remaining <= 0) {
+      break;
+    }
+
+    const available = Number(development[fieldName] ?? 0);
+    const decrement = Math.min(available, remaining);
+    if (decrement <= 0) {
+      continue;
+    }
+
+    await run(`UPDATE territory_development SET ${fieldName} = ${fieldName} - ? WHERE id = ?`, [decrement, development.id]);
+    remaining -= decrement;
+    lost += decrement;
+    touchedTerritories.push(development.territory_id);
+  }
+
+  return { lost, touchedTerritories };
+}
+
+async function loseOneDevelopmentForMaintenance(playerId) {
+  const shelterLoss = await loseDevelopments(playerId, 'shelters', 1);
+  if (shelterLoss.lost > 0) {
+    return 'riparo';
+  }
+
+  const villageLoss = await loseDevelopments(playerId, 'villages', 1);
+  if (villageLoss.lost > 0) {
+    return 'villaggio';
+  }
+
+  return null;
+}
+
+async function applyRoundMaintenance(players) {
+  for (const player of players) {
+    const totals = await get(
+      `SELECT
+         COALESCE(SUM(shelters), 0) AS shelters,
+         COALESCE(SUM(villages), 0) AS villages,
+         COALESCE(SUM(cities), 0) AS cities
+       FROM territory_development
+       WHERE player_id = ?`,
+      [player.id]
+    );
+
+    const shelters = Number(totals?.shelters ?? 0);
+    const villages = Number(totals?.villages ?? 0);
+    const cities = Number(totals?.cities ?? 0);
+    const maintenanceCost = (shelters * MAINTENANCE_COSTS.shelters)
+      + (villages * MAINTENANCE_COSTS.villages)
+      + (cities * MAINTENANCE_COSTS.cities);
+
+    if (maintenanceCost <= 0) {
+      continue;
+    }
+
+    const currentPlayer = await get('SELECT id, name, resources FROM players WHERE id = ?', [player.id]);
+    if (!currentPlayer) {
+      continue;
+    }
+
+    if (Number(currentPlayer.resources) >= maintenanceCost) {
+      await run('UPDATE players SET resources = resources - ? WHERE id = ?', [maintenanceCost, player.id]);
+      await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+        player.id,
+        `${currentPlayer.name} paga ${maintenanceCost} risorse di mantenimento.`,
+        JSON.stringify({ maintenanceCost, shelters, villages, cities, paid: true })
+      ]);
+      continue;
+    }
+
+    await run('UPDATE players SET resources = 0 WHERE id = ?', [player.id]);
+    const lostType = await loseOneDevelopmentForMaintenance(player.id);
+    const message = lostType
+      ? `${currentPlayer.name} non riesce a pagare tutto il mantenimento e perde 1 ${lostType}.`
+      : `${currentPlayer.name} non riesce a pagare tutto il mantenimento e resta senza risorse.`;
+
+    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+      player.id,
+      message,
+      JSON.stringify({ maintenanceCost, shelters, villages, cities, paid: false, lostType })
+    ]);
+  }
+}
+
+async function handleBuildShelter(req, res) {
+  try {
+    const playerId = Number(req.params.id);
+
+    if (Number.isNaN(playerId)) {
+      return res.status(400).json({ success: false, error: 'Valid player id is required.' });
+    }
+
+    const gameState = await requireCurrentPlayer(playerId, res);
+    if (!gameState) {
+      return;
+    }
+
+    const player = await get('SELECT * FROM players WHERE id = ?', [playerId]);
+    if (!player) {
+      return res.status(404).json({ success: false, error: 'Player not found.' });
+    }
+
+    if (!player.current_territory_id) {
+      return res.status(400).json({ success: false, error: 'Player is not currently in a territory.' });
+    }
+
+    if (Number(player.resources) < BUILD_SHELTER_COST) {
+      return res.status(400).json({ success: false, error: 'Risorse insufficienti: servono 5 risorse per costruire un riparo.' });
+    }
+
+    const territory = await get('SELECT * FROM territories WHERE id = ?', [player.current_territory_id]);
+    if (!territory) {
+      return res.status(404).json({ success: false, error: 'Current territory not found.' });
+    }
+
+    const development = await ensureDevelopmentRecord(playerId, territory.id);
+
+    await run('UPDATE players SET resources = resources - ? WHERE id = ?', [BUILD_SHELTER_COST, playerId]);
+    await run('UPDATE territory_development SET shelters = shelters + 1 WHERE id = ?', [development.id]);
+
+    const updatedDevelopment = await fetchPlayerDevelopmentInTerritory(playerId, territory.id);
+    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+      playerId,
+      `${player.name} costruisce un riparo nella ${territory.name}. Ripari nella ${territory.name}: ${updatedDevelopment.shelters}.`,
+      JSON.stringify({ territoryId: territory.id, territoryName: territory.name, shelters: updatedDevelopment.shelters, buildCost: BUILD_SHELTER_COST })
+    ]);
+
+    res.json({ success: true, data: await buildSharedPayload(playerId) });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+}
+
 router.get('/players', async (_req, res) => {
   try {
-    const players = await all('SELECT players.id, players.name, players.tribe, players.resources, players.current_territory_id, players.has_moved_this_turn, players.has_gathered_this_turn, territories.name AS current_territory_name FROM players LEFT JOIN territories ON territories.id = players.current_territory_id ORDER BY players.id');
+    const players = await fetchPlayersWithTerritories();
     const purchasedBeliefs = await all('SELECT player_id, belief_card_id FROM player_beliefs ORDER BY player_id, belief_card_id');
 
     const ownedBeliefsByPlayer = purchasedBeliefs.reduce((acc, row) => {
@@ -190,12 +461,13 @@ router.get('/players', async (_req, res) => {
       return acc;
     }, {});
 
-    const playersWithBeliefs = players.map((player) => ({
-      ...player,
-      owned_belief_ids: ownedBeliefsByPlayer[player.id] || []
-    }));
-
-    res.json({ success: true, data: playersWithBeliefs });
+    res.json({
+      success: true,
+      data: players.map((player) => ({
+        ...player,
+        owned_belief_ids: ownedBeliefsByPlayer[player.id] || []
+      }))
+    });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -213,12 +485,129 @@ router.get('/beliefs', async (_req, res) => {
 router.get('/game-state', async (_req, res) => {
   try {
     const gameState = await ensureValidGameState();
-
     if (!gameState) {
       return res.status(404).json({ success: false, error: 'Game state not found.' });
     }
 
     res.json({ success: true, data: gameState });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/territories', async (_req, res) => {
+  try {
+    const territories = await fetchTerritoriesWithDevelopments();
+    res.json({ success: true, data: territories });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/developments', async (_req, res) => {
+  try {
+    const developments = await fetchDevelopments();
+    res.json({ success: true, data: developments });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/territories/:id/battle', async (req, res) => {
+  try {
+    const territoryId = Number(req.params.id);
+
+    if (Number.isNaN(territoryId)) {
+      return res.status(400).json({ success: false, error: 'Valid territory id is required.' });
+    }
+
+    const territory = await get('SELECT * FROM territories WHERE id = ?', [territoryId]);
+    if (!territory) {
+      return res.status(404).json({ success: false, error: 'Territory not found.' });
+    }
+
+    if (Number(territory.prey_remaining ?? 0) > 0) {
+      return res.status(400).json({ success: false, error: 'Ci sono ancora prede: la battaglia non è necessaria.' });
+    }
+
+    const territoryDevelopments = (await fetchDevelopments()).filter(
+      (development) => Number(development.territory_id) === territoryId
+    );
+
+    if (territoryDevelopments.length < 2) {
+      return res.status(400).json({ success: false, error: 'Non ci sono insediamenti confrontabili per la battaglia.' });
+    }
+
+    const [firstDevelopment, secondDevelopment] = territoryDevelopments.slice(0, 2);
+    const players = await all(
+      'SELECT id, name FROM players WHERE id IN (?, ?) ORDER BY id',
+      [firstDevelopment.player_id, secondDevelopment.player_id]
+    );
+
+    if (players.length < 2) {
+      return res.status(400).json({ success: false, error: 'Non ci sono insediamenti confrontabili per la battaglia.' });
+    }
+
+    const firstPlayer = players.find((player) => Number(player.id) === Number(firstDevelopment.player_id));
+    const secondPlayer = players.find((player) => Number(player.id) === Number(secondDevelopment.player_id));
+
+    let battleField = null;
+    if (Number(firstDevelopment.shelters) > 0 && Number(secondDevelopment.shelters) > 0) {
+      battleField = 'shelters';
+    } else if (Number(firstDevelopment.villages) > 0 && Number(secondDevelopment.villages) > 0) {
+      battleField = 'villages';
+    } else {
+      return res.status(400).json({ success: false, error: 'Non ci sono insediamenti confrontabili per la battaglia.' });
+    }
+
+    const firstRoll = rollDie();
+    const secondRoll = rollDie();
+    let logMessage;
+    let loserId = null;
+
+    if (firstRoll === secondRoll) {
+      logMessage = `Battaglia nella ${territory.name}: pareggio, nessuna perdita.`;
+    } else {
+      const loserDevelopment = firstRoll < secondRoll ? firstDevelopment : secondDevelopment;
+      const loserPlayer = firstRoll < secondRoll ? firstPlayer : secondPlayer;
+      loserId = loserPlayer.id;
+      await run(`UPDATE territory_development SET ${battleField} = ${battleField} - 1 WHERE id = ?`, [loserDevelopment.id]);
+      logMessage = `Battaglia nella ${territory.name}: ${firstPlayer.name} tira ${firstRoll}, ${secondPlayer.name} tira ${secondRoll}. ${loserPlayer.name} perde 1 ${battleField === 'shelters' ? 'riparo' : 'villaggio'}.`;
+    }
+
+    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+      loserId,
+      logMessage,
+      JSON.stringify({
+        territoryId: territory.id,
+        territoryName: territory.name,
+        firstPlayerId: firstPlayer.id,
+        firstPlayerName: firstPlayer.name,
+        firstRoll,
+        secondPlayerId: secondPlayer.id,
+        secondPlayerName: secondPlayer.name,
+        secondRoll,
+        battleField,
+        loserId
+      })
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        territory,
+        ...(await buildSharedPayload())
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/settlements', async (_req, res) => {
+  try {
+    const settlements = await fetchLegacySettlements();
+    res.json({ success: true, data: settlements });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -258,25 +647,38 @@ router.post('/players/:id/buy-belief', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Not enough resources to buy this belief.' });
     }
 
-    await run('UPDATE players SET resources = resources - ? WHERE id = ?', [beliefCard.cost, playerId]);
+    const sameTypeRow = await get(
+      `SELECT COUNT(*) AS same_type_before
+       FROM player_beliefs
+       INNER JOIN belief_cards ON belief_cards.id = player_beliefs.belief_card_id
+       WHERE player_beliefs.player_id = ? AND belief_cards.type_code = ?`,
+      [playerId, beliefCard.type_code]
+    );
+    const sameTypeBefore = Number(sameTypeRow?.same_type_before ?? 0);
+    const multiplier = sameTypeBefore + 1;
+    const baseResourceGain = Number(beliefCard.resource_gain ?? 0);
+    const totalResourceGain = baseResourceGain * multiplier;
+    const netResourceDelta = totalResourceGain - beliefCard.cost;
+
+    await run('UPDATE players SET resources = resources - ? + ? WHERE id = ?', [beliefCard.cost, totalResourceGain, playerId]);
     await run('INSERT INTO player_beliefs (player_id, belief_card_id) VALUES (?, ?)', [playerId, beliefCardId]);
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
       playerId,
-      `Bought belief: ${beliefCard.name}`,
-      JSON.stringify({ beliefCardId, cost: beliefCard.cost })
+      `${player.name} acquista ${beliefCard.name}: costo -${beliefCard.cost}, guadagno base +${baseResourceGain}, moltiplicatore tipo ${beliefCard.type_code} ×${multiplier}, guadagno totale +${totalResourceGain}.`,
+      JSON.stringify({
+        beliefCardId,
+        beliefTitle: beliefCard.name,
+        typeCode: beliefCard.type_code,
+        cost: beliefCard.cost,
+        baseResourceGain,
+        sameTypeBefore,
+        multiplier,
+        totalResourceGain,
+        netResourceDelta
+      })
     ]);
 
-    const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [playerId]);
-    res.json({ success: true, data: { player: updatedPlayer, belief: beliefCard } });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-router.get('/territories', async (_req, res) => {
-  try {
-    const territories = await fetchTerritoriesWithSettlements();
-    res.json({ success: true, data: territories });
+    res.json({ success: true, data: await buildSharedPayload(playerId) });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -286,9 +688,19 @@ router.post('/players/:id/move', async (req, res) => {
   try {
     const playerId = Number(req.params.id);
     const territoryId = Number(req.body.territoryId);
+    const sheltersToMove = Number(req.body.sheltersToMove ?? 0);
+    const villagesToMove = Number(req.body.villagesToMove ?? 0);
 
     if (Number.isNaN(playerId) || Number.isNaN(territoryId)) {
       return res.status(400).json({ success: false, error: 'Valid player id and territory id are required.' });
+    }
+
+    if (Number.isNaN(sheltersToMove) || Number.isNaN(villagesToMove) || sheltersToMove < 0 || villagesToMove < 0) {
+      return res.status(400).json({ success: false, error: 'I valori di ripari e villaggi da spostare devono essere numeri interi positivi o zero.' });
+    }
+
+    if (!Number.isInteger(sheltersToMove) || !Number.isInteger(villagesToMove)) {
+      return res.status(400).json({ success: false, error: 'I valori di ripari e villaggi da spostare devono essere interi.' });
     }
 
     const gameState = await requireCurrentPlayer(playerId, res);
@@ -297,7 +709,6 @@ router.post('/players/:id/move', async (req, res) => {
     }
 
     const player = await get('SELECT * FROM players WHERE id = ?', [playerId]);
-
     if (!player) {
       return res.status(404).json({ success: false, error: 'Player not found.' });
     }
@@ -308,6 +719,7 @@ router.post('/players/:id/move', async (req, res) => {
 
     const currentTerritory = await get('SELECT * FROM territories WHERE id = ?', [player.current_territory_id]);
     const territory = await get('SELECT * FROM territories WHERE id = ?', [territoryId]);
+    const sourceDevelopment = await fetchPlayerDevelopmentInTerritory(playerId, player.current_territory_id);
 
     if (!territory) {
       return res.status(404).json({ success: false, error: 'Territory not found.' });
@@ -326,15 +738,62 @@ router.post('/players/:id/move', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Puoi spostarti solo in un territorio adiacente.' });
     }
 
+    const availableShelters = Number(sourceDevelopment?.shelters ?? 0);
+    const availableVillages = Number(sourceDevelopment?.villages ?? 0);
+
+    if (sheltersToMove > availableShelters) {
+      return res.status(400).json({ success: false, error: 'Non puoi spostare più ripari di quelli posseduti nel territorio di partenza.' });
+    }
+
+    if (villagesToMove > availableVillages) {
+      return res.status(400).json({ success: false, error: 'Non puoi spostare più villaggi di quelli posseduti nel territorio di partenza.' });
+    }
+
+    if (sheltersToMove > 0 || villagesToMove > 0) {
+      const destinationDevelopment = await ensureDevelopmentRecord(playerId, territoryId);
+
+      if (sourceDevelopment) {
+        await run(
+          'UPDATE territory_development SET shelters = shelters - ?, villages = villages - ? WHERE id = ?',
+          [sheltersToMove, villagesToMove, sourceDevelopment.id]
+        );
+      }
+
+      await run(
+        'UPDATE territory_development SET shelters = shelters + ?, villages = villages + ? WHERE id = ?',
+        [sheltersToMove, villagesToMove, destinationDevelopment.id]
+      );
+    }
+
     await run('UPDATE players SET current_territory_id = ?, has_moved_this_turn = 1 WHERE id = ?', [territoryId, playerId]);
+
+    let transferText = 'senza trasferire insediamenti';
+    if (sheltersToMove > 0 || villagesToMove > 0) {
+      const movedParts = [];
+      if (sheltersToMove > 0) {
+        movedParts.push(`${sheltersToMove} ${sheltersToMove === 1 ? 'riparo' : 'ripari'}`);
+      }
+      if (villagesToMove > 0) {
+        movedParts.push(`${villagesToMove} ${villagesToMove === 1 ? 'villaggio' : 'villaggi'}`);
+      }
+      transferText = `portando ${movedParts.join(' e ')}`;
+    }
+
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
       playerId,
-      `${player.name} si sposta da ${currentTerritory.name} a ${territory.name}.`,
-      JSON.stringify({ fromTerritoryId: currentTerritory.id, fromTerritoryName: currentTerritory.name, territoryId, territoryName: territory.name })
+      `${player.name} si sposta da ${currentTerritory.name} a ${territory.name} ${transferText}.`,
+      JSON.stringify({
+        fromTerritoryId: currentTerritory.id,
+        fromTerritoryName: currentTerritory.name,
+        territoryId,
+        territoryName: territory.name,
+        sheltersToMove,
+        villagesToMove,
+        citiesMoved: 0
+      })
     ]);
 
-    const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [playerId]);
-    res.json({ success: true, data: { player: updatedPlayer, territory } });
+    res.json({ success: true, data: await buildSharedPayload(playerId) });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -371,19 +830,32 @@ router.post('/players/:id/gather', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Current territory not found.' });
     }
 
+    if (Number(territory.prey_remaining ?? 0) <= 0) {
+      return res.status(400).json({ success: false, error: 'Le prede di questo territorio sono esaurite.' });
+    }
+
     const territoryBonus = TERRITORY_RESOURCE_BONUSES[territory.name];
     if (typeof territoryBonus !== 'number') {
       return res.status(400).json({ success: false, error: 'Questo territorio non ha un bonus risorse configurato.' });
     }
 
-    const settlement = await fetchPlayerSettlementInTerritory(playerId, territory.id);
-    const settlementBonus = settlement ? SETTLEMENT_RESOURCE_BONUSES[settlement.level] || 0 : 0;
-    const totalGain = territoryBonus + settlementBonus;
-    const logMessage = settlement
-      ? `${player.name} raccoglie risorse nella ${territory.name}: +${territoryBonus} base, +${settlementBonus} dal ${settlement.level}, totale +${totalGain}.`
+    const development = await fetchPlayerDevelopmentInTerritory(playerId, territory.id);
+    const developmentBonus = getDevelopmentBonus(development);
+    const totalGain = territoryBonus + developmentBonus;
+
+    await run(
+      'UPDATE players SET resources = resources + ?, has_gathered_this_turn = 1 WHERE id = ?',
+      [totalGain, playerId]
+    );
+    await run(
+      'UPDATE territories SET prey_remaining = CASE WHEN prey_remaining > 0 THEN prey_remaining - 1 ELSE 0 END WHERE id = ?',
+      [territory.id]
+    );
+
+    const logMessage = developmentBonus > 0
+      ? `${player.name} raccoglie risorse nella ${territory.name}: +${territoryBonus} base, +${developmentBonus} dagli insediamenti, totale +${totalGain}.`
       : `${player.name} raccoglie risorse nella ${territory.name}: +${territoryBonus} risorse.`;
 
-    await run('UPDATE players SET resources = resources + ?, has_gathered_this_turn = 1 WHERE id = ?', [totalGain, playerId]);
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
       playerId,
       logMessage,
@@ -391,30 +863,21 @@ router.post('/players/:id/gather', async (req, res) => {
         territoryId: territory.id,
         territoryName: territory.name,
         territoryBonus,
-        settlementId: settlement?.id ?? null,
-        settlementLevel: settlement?.level ?? null,
-        settlementBonus,
+        developmentId: development?.id ?? null,
+        developmentBonus,
         totalGain
       })
     ]);
 
-    const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [playerId]);
-    const settlements = await fetchSettlements();
-    const territories = await fetchTerritoriesWithSettlements();
-    const log = await all('SELECT * FROM game_log ORDER BY id DESC');
     res.json({
       success: true,
       data: {
-        player: updatedPlayer,
-        territory,
-        settlement,
+        ...(await buildSharedPayload(playerId)),
         territoryBonus,
-        settlementBonus,
+        developmentBonus,
+        settlementBonus: developmentBonus,
         totalGain,
-        bonus: totalGain,
-        settlements,
-        territories,
-        log: log.map(serializeLogRow)
+        bonus: totalGain
       }
     });
   } catch (error) {
@@ -422,16 +885,9 @@ router.post('/players/:id/gather', async (req, res) => {
   }
 });
 
-router.get('/settlements', async (_req, res) => {
-  try {
-    const settlements = await fetchSettlements();
-    res.json({ success: true, data: settlements });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
+router.post('/players/:id/build-shelter', handleBuildShelter);
 
-router.post('/players/:id/build-settlement', async (req, res) => {
+router.post('/players/:id/upgrade-to-village', async (req, res) => {
   try {
     const playerId = Number(req.params.id);
 
@@ -449,8 +905,49 @@ router.post('/players/:id/build-settlement', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Player not found.' });
     }
 
-    if (player.resources < BUILD_COST) {
-      return res.status(400).json({ success: false, error: 'Risorse insufficienti: servono 5 risorse per costruire un riparo.' });
+    if (!player.current_territory_id) {
+      return res.status(400).json({ success: false, error: 'Player is not currently in a territory.' });
+    }
+
+    const territory = await get('SELECT * FROM territories WHERE id = ?', [player.current_territory_id]);
+    if (!territory) {
+      return res.status(404).json({ success: false, error: 'Current territory not found.' });
+    }
+
+    const development = await fetchPlayerDevelopmentInTerritory(playerId, territory.id);
+    if (!development || Number(development.shelters) < 3) {
+      return res.status(400).json({ success: false, error: 'Servono 3 ripari per formare un villaggio.' });
+    }
+
+    await run('UPDATE territory_development SET shelters = shelters - 3, villages = villages + 1 WHERE id = ?', [development.id]);
+    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+      playerId,
+      `${player.name} trasforma 3 ripari in 1 villaggio nella ${territory.name}.`,
+      JSON.stringify({ territoryId: territory.id, territoryName: territory.name, sheltersSpent: 3, villagesGained: 1 })
+    ]);
+
+    res.json({ success: true, data: await buildSharedPayload(playerId) });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/players/:id/upgrade-to-city', async (req, res) => {
+  try {
+    const playerId = Number(req.params.id);
+
+    if (Number.isNaN(playerId)) {
+      return res.status(400).json({ success: false, error: 'Valid player id is required.' });
+    }
+
+    const gameState = await requireCurrentPlayer(playerId, res);
+    if (!gameState) {
+      return;
+    }
+
+    const player = await get('SELECT * FROM players WHERE id = ?', [playerId]);
+    if (!player) {
+      return res.status(404).json({ success: false, error: 'Player not found.' });
     }
 
     if (!player.current_territory_id) {
@@ -462,95 +959,33 @@ router.post('/players/:id/build-settlement', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Current territory not found.' });
     }
 
-    const existingSettlement = await fetchPlayerSettlementInTerritory(playerId, player.current_territory_id);
-    if (existingSettlement) {
-      return res.status(400).json({ success: false, error: 'Hai gia un insediamento in questo territorio.' });
+    const development = await fetchPlayerDevelopmentInTerritory(playerId, territory.id);
+    if (!development || Number(development.villages) < 3) {
+      return res.status(400).json({ success: false, error: 'Servono 3 villaggi per fondare una città.' });
     }
 
-    await run('UPDATE players SET resources = resources - ? WHERE id = ?', [BUILD_COST, playerId]);
-    const settlementResult = await run('INSERT INTO settlements (player_id, territory_id, level) VALUES (?, ?, ?)', [playerId, player.current_territory_id, 'riparo']);
+    if (Number(player.resources) < FOUND_CITY_COST) {
+      return res.status(400).json({ success: false, error: 'Risorse insufficienti per fondare una città.' });
+    }
+
+    await run('UPDATE players SET resources = resources - ? WHERE id = ?', [FOUND_CITY_COST, playerId]);
+    await run('UPDATE territory_development SET villages = villages - 3, cities = cities + 1 WHERE id = ?', [development.id]);
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
       playerId,
-      `${player.name} costruisce un riparo nel territorio ${territory.name}.`,
-      JSON.stringify({ settlementId: settlementResult.lastID, level: 'riparo', territoryId: territory.id })
+      `${player.name} fonda una città nella ${territory.name} consumando 3 villaggi e 40 risorse.`,
+      JSON.stringify({ territoryId: territory.id, territoryName: territory.name, villagesSpent: 3, citiesGained: 1, resourceCost: FOUND_CITY_COST })
     ]);
 
-    const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [playerId]);
-    const settlement = await get('SELECT settlements.id, settlements.player_id, settlements.territory_id, settlements.level, settlements.created_at, players.name AS player_name, territories.name AS territory_name FROM settlements LEFT JOIN players ON players.id = settlements.player_id LEFT JOIN territories ON territories.id = settlements.territory_id WHERE settlements.id = ?', [settlementResult.lastID]);
-    const settlements = await fetchSettlements();
-    const territories = await fetchTerritoriesWithSettlements();
-    res.json({
-      success: true,
-      data: {
-        player: updatedPlayer,
-        settlement: serializeSettlementRow(settlement),
-        settlements,
-        territories,
-        territory
-      }
-    });
+    res.json({ success: true, data: await buildSharedPayload(playerId) });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-router.post('/settlements/:id/upgrade', async (req, res) => {
-  try {
-    const settlementId = Number(req.params.id);
+router.post('/players/:id/build-settlement', handleBuildShelter);
 
-    if (Number.isNaN(settlementId)) {
-      return res.status(400).json({ success: false, error: 'Valid settlement id is required.' });
-    }
-
-    const settlement = await get('SELECT settlements.id, settlements.player_id, settlements.territory_id, settlements.level, settlements.created_at, players.name AS player_name, territories.name AS territory_name FROM settlements LEFT JOIN players ON players.id = settlements.player_id LEFT JOIN territories ON territories.id = settlements.territory_id WHERE settlements.id = ?', [settlementId]);
-    if (!settlement) {
-      return res.status(404).json({ success: false, error: 'Settlement not found.' });
-    }
-
-    const player = await get('SELECT * FROM players WHERE id = ?', [settlement.player_id]);
-    if (!player) {
-      return res.status(404).json({ success: false, error: 'Player not found.' });
-    }
-
-    const gameState = await requireCurrentPlayer(settlement.player_id, res);
-    if (!gameState) {
-      return;
-    }
-
-    const upgradePlan = UPGRADE_COSTS[settlement.level];
-
-    if (!upgradePlan) {
-      return res.status(400).json({ success: false, error: 'Questo insediamento e gia una citta e non puo essere migliorato oltre.' });
-    }
-
-    if (player.resources < upgradePlan.cost) {
-      return res.status(400).json({ success: false, error: `Risorse insufficienti: servono ${upgradePlan.cost} risorse per migliorare a ${upgradePlan.nextLevel}.` });
-    }
-
-    await run('UPDATE players SET resources = resources - ? WHERE id = ?', [upgradePlan.cost, settlement.player_id]);
-    await run('UPDATE settlements SET level = ? WHERE id = ?', [upgradePlan.nextLevel, settlementId]);
-    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
-      settlement.player_id,
-      `${player.name} migliora un ${settlement.level} in ${upgradePlan.nextLevel} nel territorio ${settlement.territory_name}.`,
-      JSON.stringify({ settlementId, fromLevel: settlement.level, toLevel: upgradePlan.nextLevel })
-    ]);
-
-    const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [player.id]);
-    const updatedSettlement = await get('SELECT settlements.id, settlements.player_id, settlements.territory_id, settlements.level, settlements.created_at, players.name AS player_name, territories.name AS territory_name FROM settlements LEFT JOIN players ON players.id = settlements.player_id LEFT JOIN territories ON territories.id = settlements.territory_id WHERE settlements.id = ?', [settlementId]);
-    const settlements = await fetchSettlements();
-    const territories = await fetchTerritoriesWithSettlements();
-    res.json({
-      success: true,
-      data: {
-        player: updatedPlayer,
-        settlement: serializeSettlementRow(updatedSettlement),
-        settlements,
-        territories
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
+router.post('/settlements/:id/upgrade', async (_req, res) => {
+  res.status(410).json({ success: false, error: 'La vecchia API di upgrade degli insediamenti non è più supportata. Usa /upgrade-to-village o /upgrade-to-city.' });
 });
 
 router.get('/events', async (_req, res) => {
@@ -592,68 +1027,48 @@ router.post('/players/:id/draw-event', async (req, res) => {
       return res.status(404).json({ success: false, error: 'No event card available.' });
     }
 
-    let newResources = player.resources;
+    let newResources = Number(player.resources);
     let logMessage = `${player.name} pesca ${eventCard.title}: ${eventCard.description}`;
 
     if (eventCard.effect_type === 'gain_resources') {
-      newResources = player.resources + eventCard.effect_value;
+      newResources += Number(eventCard.effect_value);
       logMessage = `${player.name} pesca ${eventCard.title}: guadagna ${eventCard.effect_value} risorse.`;
     } else if (eventCard.effect_type === 'lose_resources') {
-      newResources = Math.max(0, player.resources - eventCard.effect_value);
-      const lostResources = player.resources - newResources;
+      newResources = Math.max(0, newResources - Number(eventCard.effect_value));
+      const lostResources = Number(player.resources) - newResources;
       logMessage = `${player.name} pesca ${eventCard.title}: perde ${lostResources} risorse.`;
     } else if (eventCard.effect_type === 'lose_shelters') {
-      const shelters = await fetchPlayerSettlementsByLevel(playerId, 'riparo', eventCard.effect_value);
-      await deleteSettlementsByIds(shelters.map((settlement) => settlement.id));
-      if (shelters.length === 0) {
-        logMessage = `${player.name} pesca ${eventCard.title}: non possiede ripari, nessuna perdita.`;
-      } else {
-        logMessage = `${player.name} pesca ${eventCard.title}: perde ${shelters.length} ${shelters.length === 1 ? 'riparo' : 'ripari'}.`;
-      }
+      const result = await loseDevelopments(playerId, 'shelters', Number(eventCard.effect_value));
+      logMessage = result.lost === 0
+        ? `${player.name} pesca ${eventCard.title}: non possiede ripari, nessuna perdita.`
+        : `${player.name} pesca ${eventCard.title}: perde ${result.lost} ${result.lost === 1 ? 'riparo' : 'ripari'}.`;
     } else if (eventCard.effect_type === 'lose_villages') {
-      const villages = await fetchPlayerSettlementsByLevel(playerId, 'villaggio', eventCard.effect_value);
-      await deleteSettlementsByIds(villages.map((settlement) => settlement.id));
-      if (villages.length === 0) {
-        logMessage = `${player.name} pesca ${eventCard.title}: non possiede villaggi, nessuna perdita.`;
-      } else {
-        logMessage = `${player.name} pesca ${eventCard.title}: perde ${villages.length} ${villages.length === 1 ? 'villaggio' : 'villaggi'}.`;
-      }
+      const result = await loseDevelopments(playerId, 'villages', Number(eventCard.effect_value));
+      logMessage = result.lost === 0
+        ? `${player.name} pesca ${eventCard.title}: non possiede villaggi, nessuna perdita.`
+        : `${player.name} pesca ${eventCard.title}: perde ${result.lost} ${result.lost === 1 ? 'villaggio' : 'villaggi'}.`;
     } else if (eventCard.effect_type === 'lose_city') {
-      const cities = await fetchPlayerSettlementsByLevel(playerId, 'citta', 1);
-      await deleteSettlementsByIds(cities.map((settlement) => settlement.id));
-      if (cities.length === 0) {
-        logMessage = `${player.name} pesca ${eventCard.title}: non possiede citta, nessuna perdita.`;
-      } else {
-        logMessage = `${player.name} pesca ${eventCard.title}: perde 1 citta.`;
-      }
+      const result = await loseDevelopments(playerId, 'cities', 1);
+      logMessage = result.lost === 0
+        ? `${player.name} pesca ${eventCard.title}: non possiede città, nessuna perdita.`
+        : `${player.name} pesca ${eventCard.title}: perde 1 città.`;
     } else if (eventCard.effect_type === 'gain_shelters') {
       if (!player.current_territory_id) {
         logMessage = `${player.name} pesca ${eventCard.title}: nessun territorio attuale, nessun riparo costruito.`;
       } else {
-        const existingSettlement = await fetchPlayerSettlementInTerritory(playerId, player.current_territory_id);
-        if (existingSettlement) {
-          logMessage = `${player.name} pesca ${eventCard.title}: ha gia un insediamento in questo territorio, nessun nuovo riparo.`;
-        } else {
-          await run('INSERT INTO settlements (player_id, territory_id, level) VALUES (?, ?, ?)', [playerId, player.current_territory_id, 'riparo']);
-          logMessage = `${player.name} pesca ${eventCard.title}: costruisce 1 riparo nel territorio attuale.`;
-        }
+        const territory = await get('SELECT * FROM territories WHERE id = ?', [player.current_territory_id]);
+        const development = await ensureDevelopmentRecord(playerId, player.current_territory_id);
+        await run('UPDATE territory_development SET shelters = shelters + ? WHERE id = ?', [Number(eventCard.effect_value), development.id]);
+        logMessage = `${player.name} pesca ${eventCard.title}: ottiene ${eventCard.effect_value} ripari nella ${territory.name}.`;
       }
     } else if (eventCard.effect_type === 'gain_village') {
       if (!player.current_territory_id) {
         logMessage = `${player.name} pesca ${eventCard.title}: nessun territorio attuale, nessun villaggio conquistato.`;
       } else {
-        const existingSettlement = await fetchPlayerSettlementInTerritory(playerId, player.current_territory_id);
-        if (!existingSettlement) {
-          await run('INSERT INTO settlements (player_id, territory_id, level) VALUES (?, ?, ?)', [playerId, player.current_territory_id, 'villaggio']);
-          logMessage = `${player.name} pesca ${eventCard.title}: conquista 1 villaggio.`;
-        } else if (existingSettlement.level === 'riparo') {
-          await run('UPDATE settlements SET level = ? WHERE id = ?', ['villaggio', existingSettlement.id]);
-          logMessage = `${player.name} pesca ${eventCard.title}: il riparo nel territorio attuale diventa un villaggio.`;
-        } else if (existingSettlement.level === 'villaggio') {
-          logMessage = `${player.name} pesca ${eventCard.title}: possiede gia un villaggio in questo territorio, nessun cambiamento.`;
-        } else {
-          logMessage = `${player.name} pesca ${eventCard.title}: possiede gia una citta in questo territorio, nessun cambiamento.`;
-        }
+        const territory = await get('SELECT * FROM territories WHERE id = ?', [player.current_territory_id]);
+        const development = await ensureDevelopmentRecord(playerId, player.current_territory_id);
+        await run('UPDATE territory_development SET villages = villages + ? WHERE id = ?', [Number(eventCard.effect_value), development.id]);
+        logMessage = `${player.name} pesca ${eventCard.title}: conquista ${eventCard.effect_value} villaggio nella ${territory.name}.`;
       }
     }
 
@@ -664,18 +1079,11 @@ router.post('/players/:id/draw-event', async (req, res) => {
       JSON.stringify({ eventCardId: eventCard.id, effectType: eventCard.effect_type, effectValue: eventCard.effect_value })
     ]);
 
-    const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [playerId]);
-    const settlements = await fetchSettlements();
-    const territories = await fetchTerritoriesWithSettlements();
-    const log = await all('SELECT * FROM game_log ORDER BY id DESC');
     res.json({
       success: true,
       data: {
-        player: updatedPlayer,
-        event: eventCard,
-        settlements,
-        territories,
-        log: log.map(serializeLogRow)
+        ...(await buildSharedPayload(playerId)),
+        event: eventCard
       }
     });
   } catch (error) {
@@ -699,7 +1107,7 @@ router.post('/turn/end', async (_req, res) => {
       return res.status(400).json({ success: false, error: 'Lo stato della partita non è inizializzato.' });
     }
 
-    const players = await all('SELECT id, name FROM players ORDER BY id');
+    const players = await fetchPlayersForTurnOrder();
     if (players.length === 0) {
       return res.status(400).json({ success: false, error: 'No players found.' });
     }
@@ -712,6 +1120,10 @@ router.post('/turn/end', async (_req, res) => {
     const isLastPlayer = currentIndex === players.length - 1;
     const nextPlayer = isLastPlayer ? players[0] : players[currentIndex + 1];
     const nextRound = isLastPlayer ? gameState.round + 1 : gameState.round;
+
+    if (isLastPlayer) {
+      await applyRoundMaintenance(players);
+    }
 
     await run('UPDATE players SET has_moved_this_turn = 0, has_gathered_this_turn = 0');
     await run('UPDATE game_state SET current_player_id = ?, round = ? WHERE id = ?', [nextPlayer.id, nextRound, gameState.id]);
@@ -735,18 +1147,19 @@ router.post('/turn/end', async (_req, res) => {
 
 router.post('/reset', async (_req, res) => {
   try {
-    const forest = await get('SELECT id FROM territories WHERE name = ?', ['Foresta']);
-    const plain = await get('SELECT id FROM territories WHERE name = ?', ['Pianura']);
-    const cave = await get('SELECT id FROM territories WHERE name = ?', ['Grotta']);
-    await run('DELETE FROM player_beliefs');
-    await run('DELETE FROM game_log');
-    await run('DELETE FROM settlements');
-    await run('UPDATE players SET resources = 10, has_moved_this_turn = 0, has_gathered_this_turn = 0, current_territory_id = CASE name WHEN ? THEN ? WHEN ? THEN ? WHEN ? THEN ? ELSE NULL END', ['Ayla', forest?.id ?? null, 'Bram', plain?.id ?? null, 'Iria', cave?.id ?? null]);
-    await resetGameStateToAyla(1);
-
-    const players = await all('SELECT players.id, players.name, players.tribe, players.resources, players.current_territory_id, players.has_moved_this_turn, players.has_gathered_this_turn, territories.name AS current_territory_name FROM players LEFT JOIN territories ON territories.id = players.current_territory_id ORDER BY players.id');
-    const gameState = await ensureValidGameState();
-    res.json({ success: true, data: { message: 'Game reset successfully.', players, gameState } });
+    await resetGameSession(1);
+    const payload = await buildSharedPayload();
+    res.json({
+      success: true,
+      data: {
+        message: 'Game reset successfully.',
+        players: await fetchPlayersWithTerritories(),
+        gameState: payload.gameState,
+        territories: payload.territories,
+        developments: payload.developments,
+        log: payload.log
+      }
+    });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }

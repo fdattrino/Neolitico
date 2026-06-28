@@ -1,4 +1,4 @@
-function EventPanel({ players, currentPlayerId, onDraw }) {
+function EventPanel({ players, currentPlayerId, onDraw, events = [] }) {
   const activePlayerId = Number(currentPlayerId);
 
   return (
@@ -11,7 +11,7 @@ function EventPanel({ players, currentPlayerId, onDraw }) {
           </button>
         ))}
       </div>
-      <p className="hint">Ogni evento può aumentare o diminuire le risorse del giocatore.</p>
+      <p className="hint">Ogni evento può aumentare o diminuire le risorse del giocatore. Eventi disponibili: {events.length}.</p>
     </div>
   );
 }

@@ -36,6 +36,9 @@ function ensureBeliefCardColumns() {
       if (!columnNames.has('effect_text')) {
         statements.push('ALTER TABLE belief_cards ADD COLUMN effect_text TEXT');
       }
+      if (!columnNames.has('resource_gain')) {
+        statements.push('ALTER TABLE belief_cards ADD COLUMN resource_gain INTEGER DEFAULT 0');
+      }
 
       const runNext = () => {
         if (statements.length === 0) {
@@ -115,6 +118,60 @@ function ensureSettlementConstraints() {
   });
 }
 
+function ensureTerritoryColumns() {
+  return new Promise((resolve, reject) => {
+    db.all('PRAGMA table_info(territories)', (err, columns) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+
+      const columnNames = new Set(columns.map((column) => column.name));
+      const statements = [];
+
+      if (!columnNames.has('total_prey')) {
+        statements.push('ALTER TABLE territories ADD COLUMN total_prey INTEGER NOT NULL DEFAULT 0');
+      }
+      if (!columnNames.has('prey_remaining')) {
+        statements.push('ALTER TABLE territories ADD COLUMN prey_remaining INTEGER NOT NULL DEFAULT 0');
+      }
+
+      const runNext = () => {
+        if (statements.length === 0) {
+          resolve();
+          return;
+        }
+
+        const statement = statements.shift();
+        db.run(statement, (alterErr) => {
+          if (alterErr) {
+            reject(alterErr);
+            return;
+          }
+          runNext();
+        });
+      };
+
+      runNext();
+    });
+  });
+}
+
+function ensureTerritoryDevelopmentConstraints() {
+  return new Promise((resolve, reject) => {
+    db.run(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_territory_development_player_territory ON territory_development(player_id, territory_id)',
+      (err) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve();
+      }
+    );
+  });
+}
+
 function initDb() {
   return new Promise((resolve, reject) => {
     const schema = `
@@ -128,6 +185,8 @@ function initDb() {
         resource_bonus TEXT NOT NULL,
         position_x INTEGER NOT NULL,
         position_y INTEGER NOT NULL,
+        total_prey INTEGER NOT NULL DEFAULT 0,
+        prey_remaining INTEGER NOT NULL DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -151,6 +210,7 @@ function initDb() {
         technology TEXT,
         type_code TEXT,
         cost INTEGER NOT NULL,
+        resource_gain INTEGER DEFAULT 0,
         effect_text TEXT,
         number INTEGER,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -185,6 +245,18 @@ function initDb() {
         FOREIGN KEY(territory_id) REFERENCES territories(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS territory_development (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_id INTEGER NOT NULL,
+        territory_id INTEGER NOT NULL,
+        shelters INTEGER NOT NULL DEFAULT 0,
+        villages INTEGER NOT NULL DEFAULT 0,
+        cities INTEGER NOT NULL DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(player_id) REFERENCES players(id) ON DELETE CASCADE,
+        FOREIGN KEY(territory_id) REFERENCES territories(id) ON DELETE CASCADE
+      );
+
       CREATE TABLE IF NOT EXISTS game_state (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         current_player_id INTEGER,
@@ -207,7 +279,22 @@ function initDb() {
         return;
       }
 
-      Promise.all([ensureBeliefCardColumns(), ensurePlayerColumns(), ensureSettlementConstraints()])
+      Promise.all([
+        ensureBeliefCardColumns(),
+        ensurePlayerColumns(),
+        ensureTerritoryColumns(),
+        ensureSettlementConstraints(),
+        ensureTerritoryDevelopmentConstraints()
+      ])
+        .then(() => run(
+          `UPDATE belief_cards
+           SET resource_gain = CASE
+             WHEN cost <= 2 THEN 2
+             WHEN cost <= 4 THEN 3
+             ELSE 5
+           END
+           WHERE COALESCE(resource_gain, 0) = 0`
+        ))
         .then(() => resolve())
         .catch(reject);
     });

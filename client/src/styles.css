@@ -75,10 +75,26 @@ button:disabled {
   color: #dcefe7;
 }
 
-.layout {
+.layout,
+.game-layout {
   display: grid;
-  grid-template-columns: repeat(2, minmax(280px, 1fr));
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.game-layout {
+  grid-template-columns: minmax(360px, 1fr) minmax(480px, 2fr);
+}
+
+.left-column {
+  display: flex;
+  flex-direction: column;
   gap: 1rem;
+  align-self: start;
+}
+
+.right-column {
+  align-self: start;
 }
 
 .turn-panel {
@@ -103,6 +119,9 @@ button:disabled {
   border-radius: 16px;
   padding: 1rem 1.2rem;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+  align-self: start;
+  height: auto;
+  min-height: 0;
 }
 
 .events-stack {
@@ -120,10 +139,16 @@ button:disabled {
   gap: 1rem;
 }
 
-.map-grid {
+.players-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.player-card {
+  padding: 1rem;
+  min-width: 180px;
 }
 
 .territory-cell {
@@ -139,6 +164,13 @@ button:disabled {
   font-size: 1rem;
 }
 
+.territory-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
 .territory-type {
   display: inline-block;
   font-size: 0.8rem;
@@ -151,6 +183,12 @@ button:disabled {
   margin: 0 0 0.6rem;
   color: #4b5563;
   font-size: 0.9rem;
+}
+
+.territory-prey {
+  margin: 0 0 0.65rem;
+  color: #24553b;
+  font-weight: 700;
 }
 
 .territory-players {
@@ -190,24 +228,40 @@ button:disabled {
   padding: 0.45rem 0.6rem;
 }
 
+.move-transfer {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: #24553b;
+}
+
+.move-transfer span {
+  font-weight: 600;
+}
+
 .turn-waiting {
   color: #6b7280;
   font-style: italic;
 }
 
-.settlement-list {
+.development-list {
   margin-top: 0.6rem;
   display: grid;
   gap: 0.35rem;
 }
 
-.settlement-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.development-item {
+  display: grid;
   gap: 0.5rem;
   font-size: 0.9rem;
   color: #24553b;
+  padding: 0.45rem 0.55rem;
+  border-radius: 10px;
+  background: rgba(47, 111, 79, 0.08);
+}
+
+.territory-actions {
+  margin-top: 0.7rem;
 }
 
 .card-list {
@@ -215,11 +269,53 @@ button:disabled {
   gap: 0.8rem;
 }
 
+.players-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.beliefs-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: stretch;
+}
+
 .card {
   border: 1px solid #e3dccf;
   padding: 0.9rem;
   border-radius: 12px;
   background: #fcf8ef;
+}
+
+.player-card {
+  padding: 1rem;
+  min-height: auto;
+  min-width: 180px;
+}
+
+.player-card h3 {
+  margin: 0 0 0.35rem;
+}
+
+.player-card p {
+  margin: 0.25rem 0;
+}
+
+.player-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.belief-card {
+  width: 100%;
+}
+
+.belief-card h3 {
+  margin-top: 0;
 }
 
 .actions {
@@ -262,7 +358,8 @@ button:disabled {
 }
 
 @media (max-width: 800px) {
-  .layout {
+  .layout,
+  .game-layout {
     grid-template-columns: 1fr;
   }
 
@@ -277,6 +374,20 @@ button:disabled {
   }
 
   .map-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .players-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .beliefs-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1000px) {
+  .game-layout {
     grid-template-columns: 1fr;
   }
 }
