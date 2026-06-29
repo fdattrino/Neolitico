@@ -154,12 +154,8 @@ function App() {
       'Raccolta risorse non riuscita'
     );
 
-    const developmentBonus = Number(result.data?.developmentBonus ?? result.data?.settlementBonus ?? 0);
-    if (developmentBonus > 0) {
-      setSuccessMessage(`Raccolta completata: +${result.data?.territoryBonus ?? 0} base e +${developmentBonus} dagli insediamenti, totale +${result.data?.totalGain ?? 0}.`);
-    } else {
-      setSuccessMessage(`Raccolta completata: +${result.data?.totalGain ?? result.data?.bonus ?? 0} risorse.`);
-    }
+    const totalProduction = Number(result.data?.production?.totalProduction ?? 0);
+    setSuccessMessage(`Produzione completata: +${totalProduction} risorse.`);
   };
 
   const buildShelter = (playerId) => (
@@ -170,6 +166,18 @@ function App() {
       }),
       'Riparo costruito con successo.',
       'Costruzione non riuscita'
+    )
+  );
+
+  const placeShelter = (playerId, territoryId) => (
+    performAction(
+      () => fetch(`${API_BASE}/players/${playerId}/place-shelter`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ territoryId })
+      }),
+      'Riparo collocato.',
+      'Collocazione riparo non riuscita'
     )
   );
 
@@ -257,6 +265,7 @@ function App() {
                   currentPlayerId={gameState?.current_player_id}
                   onMove={movePlayer}
                   onBattle={battleInTerritory}
+                  onPlaceShelter={placeShelter}
                 />
               </section>
               <section className="panel">

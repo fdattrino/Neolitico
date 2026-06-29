@@ -7,22 +7,6 @@ const router = express.Router();
 const BUILD_SHELTER_COST = 5;
 const FOUND_CITY_COST = 40;
 const NOT_CURRENT_TURN_ERROR = 'Non è il turno di questo giocatore.';
-const TERRITORY_RESOURCE_BONUSES = {
-  Foresta: 8,
-  Fiume: 7,
-  Collina: 6,
-  Pianura: 9,
-  Lago: 7,
-  Montagna: 6,
-  Costa: 8,
-  Grotta: 5,
-  Valle: 8
-};
-const DEVELOPMENT_RESOURCE_BONUSES = {
-  shelter: 2,
-  village: 5,
-  city: 10
-};
 const MAINTENANCE_COSTS = {
   shelters: 5,
   villages: 10,
@@ -117,8 +101,12 @@ async function fetchTerritoriesWithDevelopments() {
 
   return territories.map((territory) => ({
     ...territory,
+    prey_capacity: Number(territory.prey_capacity ?? territory.total_prey ?? 0),
     total_prey: Number(territory.total_prey ?? 0),
     prey_remaining: Number(territory.prey_remaining ?? 0),
+    shelter_yield: Number(territory.shelter_yield ?? 0),
+    village_yield: Number(territory.village_yield ?? 0),
+    city_yield: Number(territory.city_yield ?? 0),
     developments: developmentsByTerritory[territory.id] || [],
     settlements: settlementsByTerritory[territory.id] || []
   }));
@@ -172,14 +160,50 @@ async function ensureDevelopmentRecord(playerId, territoryId) {
   };
 }
 
-function getDevelopmentBonus(development) {
-  if (!development) {
-    return 0;
+function getEffectiveSheltersToPlace(player) {
+  return Number(player?.shelters_to_place ?? 0);
+}
+
+function isPlacementPhase(player) {
+  return getEffectiveSheltersToPlace(player) > 0;
+}
+
+function calculateProduction(territory, development) {
+  const shelters = Number(development?.shelters ?? 0);
+  const villages = Number(development?.villages ?? 0);
+  const cities = Number(development?.cities ?? 0);
+  const preyRemaining = Number(territory?.prey_remaining ?? 0);
+  const activeShelters = Math.min(shelters, preyRemaining);
+  const shelterYield = Number(territory?.shelter_yield ?? 0);
+  const villageYield = Number(territory?.village_yield ?? 0);
+  const cityYield = Number(territory?.city_yield ?? 0);
+  const shelterProduction = activeShelters * shelterYield;
+  const villageProduction = villages * villageYield;
+  const cityProduction = cities * cityYield;
+
+  return {
+    shelters,
+    villages,
+    cities,
+    preyConsumed: activeShelters,
+    inactiveShelters: shelters - activeShelters,
+    shelterProduction,
+    villageProduction,
+    cityProduction,
+    totalProduction: shelterProduction + villageProduction + cityProduction
+  };
+}
+
+async function requirePlacementPhaseComplete(player, res, actionLabel) {
+  if (!isPlacementPhase(player)) {
+    return true;
   }
 
-  return (Number(development.shelters ?? 0) * DEVELOPMENT_RESOURCE_BONUSES.shelter)
-    + (Number(development.villages ?? 0) * DEVELOPMENT_RESOURCE_BONUSES.village)
-    + (Number(development.cities ?? 0) * DEVELOPMENT_RESOURCE_BONUSES.city);
+  res.status(400).json({
+    success: false,
+    error: `${player.name} deve prima collocare tutti i ripari iniziali. Azione non disponibile: ${actionLabel}.`
+  });
+  return false;
 }
 
 function rollDie() {
@@ -201,13 +225,18 @@ async function fetchAyla() {
 }
 
 async function fetchPlayersWithTerritories() {
-  return all(
+  const players = await all(
     `SELECT players.*, territories.name AS current_territory_name
      FROM players
      LEFT JOIN territories ON territories.id = players.current_territory_id
      ORDER BY players.id`,
     []
   );
+
+  return players.map((player) => ({
+    ...player,
+    shelters_to_place: getEffectiveSheltersToPlace(player)
+  }));
 }
 
 async function fetchPlayersForTurnOrder() {
@@ -269,13 +298,20 @@ async function requireCurrentPlayer(playerId, res) {
 }
 
 async function getPlayerWithTerritory(playerId) {
-  return get(
+  const player = await get(
     `SELECT players.*, territories.name AS current_territory_name
      FROM players
      LEFT JOIN territories ON territories.id = players.current_territory_id
      WHERE players.id = ?`,
     [playerId]
   );
+
+  return player
+    ? {
+      ...player,
+      shelters_to_place: getEffectiveSheltersToPlace(player)
+    }
+    : null;
 }
 
 async function buildSharedPayload(playerId) {
@@ -417,6 +453,10 @@ async function handleBuildShelter(req, res) {
       return res.status(404).json({ success: false, error: 'Player not found.' });
     }
 
+    if (!(await requirePlacementPhaseComplete(player, res, 'costruzione riparo'))) {
+      return;
+    }
+
     if (!player.current_territory_id) {
       return res.status(400).json({ success: false, error: 'Player is not currently in a territory.' });
     }
@@ -440,6 +480,57 @@ async function handleBuildShelter(req, res) {
       playerId,
       `${player.name} costruisce un riparo nella ${territory.name}. Ripari nella ${territory.name}: ${updatedDevelopment.shelters}.`,
       JSON.stringify({ territoryId: territory.id, territoryName: territory.name, shelters: updatedDevelopment.shelters, buildCost: BUILD_SHELTER_COST })
+    ]);
+
+    res.json({ success: true, data: await buildSharedPayload(playerId) });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+async function handlePlaceShelter(req, res) {
+  try {
+    const playerId = Number(req.params.id);
+    const territoryId = Number(req.body.territoryId);
+
+    if (Number.isNaN(playerId) || Number.isNaN(territoryId)) {
+      return res.status(400).json({ success: false, error: 'Valid player id and territory id are required.' });
+    }
+
+    const gameState = await requireCurrentPlayer(playerId, res);
+    if (!gameState) {
+      return;
+    }
+
+    const player = await get('SELECT * FROM players WHERE id = ?', [playerId]);
+    if (!player) {
+      return res.status(404).json({ success: false, error: 'Player not found.' });
+    }
+
+    if (getEffectiveSheltersToPlace(player) <= 0) {
+      return res.status(400).json({ success: false, error: 'Non ci sono più ripari iniziali da collocare.' });
+    }
+
+    const territory = await get('SELECT * FROM territories WHERE id = ?', [territoryId]);
+    if (!territory) {
+      return res.status(404).json({ success: false, error: 'Territory not found.' });
+    }
+
+    const development = await ensureDevelopmentRecord(playerId, territoryId);
+
+    await run('UPDATE territory_development SET shelters = shelters + 1 WHERE id = ?', [development.id]);
+    await run('UPDATE players SET shelters_to_place = shelters_to_place - 1 WHERE id = ?', [playerId]);
+
+    const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [playerId]);
+    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+      playerId,
+      `${player.name} colloca un riparo nella ${territory.name}. Ripari ancora da collocare: ${getEffectiveSheltersToPlace(updatedPlayer)}.`,
+      JSON.stringify({
+        territoryId: territory.id,
+        territoryName: territory.name,
+        sheltersPlaced: 1,
+        sheltersToPlaceRemaining: getEffectiveSheltersToPlace(updatedPlayer)
+      })
     ]);
 
     res.json({ success: true, data: await buildSharedPayload(playerId) });
@@ -519,6 +610,15 @@ router.post('/territories/:id/battle', async (req, res) => {
 
     if (Number.isNaN(territoryId)) {
       return res.status(400).json({ success: false, error: 'Valid territory id is required.' });
+    }
+
+    const gameState = await ensureValidGameState();
+    const currentPlayer = gameState?.current_player_id
+      ? await get('SELECT * FROM players WHERE id = ?', [gameState.current_player_id])
+      : null;
+
+    if (currentPlayer && !(await requirePlacementPhaseComplete(currentPlayer, res, 'battaglia'))) {
+      return;
     }
 
     const territory = await get('SELECT * FROM territories WHERE id = ?', [territoryId]);
@@ -713,6 +813,10 @@ router.post('/players/:id/move', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Player not found.' });
     }
 
+    if (!(await requirePlacementPhaseComplete(player, res, 'spostamento'))) {
+      return;
+    }
+
     if (Number(player.has_moved_this_turn) === 1) {
       return res.status(400).json({ success: false, error: 'Hai già effettuato uno spostamento in questo turno.' });
     }
@@ -817,6 +921,10 @@ router.post('/players/:id/gather', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Player not found.' });
     }
 
+    if (!(await requirePlacementPhaseComplete(player, res, 'produzione'))) {
+      return;
+    }
+
     if (Number(player.has_gathered_this_turn) === 1) {
       return res.status(400).json({ success: false, error: 'Hai già raccolto risorse in questo turno.' });
     }
@@ -830,31 +938,42 @@ router.post('/players/:id/gather', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Current territory not found.' });
     }
 
-    if (Number(territory.prey_remaining ?? 0) <= 0) {
-      return res.status(400).json({ success: false, error: 'Le prede di questo territorio sono esaurite.' });
-    }
-
-    const territoryBonus = TERRITORY_RESOURCE_BONUSES[territory.name];
-    if (typeof territoryBonus !== 'number') {
-      return res.status(400).json({ success: false, error: 'Questo territorio non ha un bonus risorse configurato.' });
-    }
-
     const development = await fetchPlayerDevelopmentInTerritory(playerId, territory.id);
-    const developmentBonus = getDevelopmentBonus(development);
-    const totalGain = territoryBonus + developmentBonus;
+    const production = calculateProduction(territory, development);
+
+    if (production.totalProduction <= 0) {
+      return res.status(400).json({ success: false, error: 'Non ci sono strutture produttive attive in questo territorio.' });
+    }
 
     await run(
       'UPDATE players SET resources = resources + ?, has_gathered_this_turn = 1 WHERE id = ?',
-      [totalGain, playerId]
+      [production.totalProduction, playerId]
     );
-    await run(
-      'UPDATE territories SET prey_remaining = CASE WHEN prey_remaining > 0 THEN prey_remaining - 1 ELSE 0 END WHERE id = ?',
-      [territory.id]
-    );
+    if (production.preyConsumed > 0) {
+      await run(
+        'UPDATE territories SET prey_remaining = CASE WHEN prey_remaining >= ? THEN prey_remaining - ? ELSE 0 END WHERE id = ?',
+        [production.preyConsumed, production.preyConsumed, territory.id]
+      );
+    }
 
-    const logMessage = developmentBonus > 0
-      ? `${player.name} raccoglie risorse nella ${territory.name}: +${territoryBonus} base, +${developmentBonus} dagli insediamenti, totale +${totalGain}.`
-      : `${player.name} raccoglie risorse nella ${territory.name}: +${territoryBonus} risorse.`;
+    const logParts = [];
+    if (production.shelterProduction > 0) {
+      logParts.push(`ripari +${production.shelterProduction}`);
+    }
+    if (production.villageProduction > 0) {
+      logParts.push(`villaggi +${production.villageProduction}`);
+    }
+    if (production.cityProduction > 0) {
+      logParts.push(`città +${production.cityProduction}`);
+    }
+    if (production.preyConsumed > 0) {
+      logParts.push(`prede consumate ${production.preyConsumed}`);
+    }
+    if (production.inactiveShelters > 0) {
+      logParts.push(`ripari senza prede ${production.inactiveShelters}`);
+    }
+
+    const logMessage = `${player.name} produce nella ${territory.name}: ${logParts.join(', ')}, totale +${production.totalProduction}.`;
 
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
       playerId,
@@ -862,10 +981,11 @@ router.post('/players/:id/gather', async (req, res) => {
       JSON.stringify({
         territoryId: territory.id,
         territoryName: territory.name,
-        territoryBonus,
         developmentId: development?.id ?? null,
-        developmentBonus,
-        totalGain
+        shelterYield: Number(territory.shelter_yield ?? 0),
+        villageYield: Number(territory.village_yield ?? 0),
+        cityYield: Number(territory.city_yield ?? 0),
+        ...production
       })
     ]);
 
@@ -873,11 +993,7 @@ router.post('/players/:id/gather', async (req, res) => {
       success: true,
       data: {
         ...(await buildSharedPayload(playerId)),
-        territoryBonus,
-        developmentBonus,
-        settlementBonus: developmentBonus,
-        totalGain,
-        bonus: totalGain
+        production
       }
     });
   } catch (error) {
@@ -886,6 +1002,7 @@ router.post('/players/:id/gather', async (req, res) => {
 });
 
 router.post('/players/:id/build-shelter', handleBuildShelter);
+router.post('/players/:id/place-shelter', handlePlaceShelter);
 
 router.post('/players/:id/upgrade-to-village', async (req, res) => {
   try {
@@ -903,6 +1020,10 @@ router.post('/players/:id/upgrade-to-village', async (req, res) => {
     const player = await get('SELECT * FROM players WHERE id = ?', [playerId]);
     if (!player) {
       return res.status(404).json({ success: false, error: 'Player not found.' });
+    }
+
+    if (!(await requirePlacementPhaseComplete(player, res, 'formazione villaggio'))) {
+      return;
     }
 
     if (!player.current_territory_id) {
@@ -948,6 +1069,10 @@ router.post('/players/:id/upgrade-to-city', async (req, res) => {
     const player = await get('SELECT * FROM players WHERE id = ?', [playerId]);
     if (!player) {
       return res.status(404).json({ success: false, error: 'Player not found.' });
+    }
+
+    if (!(await requirePlacementPhaseComplete(player, res, 'fondazione città'))) {
+      return;
     }
 
     if (!player.current_territory_id) {

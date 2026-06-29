@@ -35,7 +35,10 @@ async function insertTerritories() {
 
   for (const territory of territories) {
     const result = await run(
-      'INSERT INTO territories (name, terrain_type, description, resource_bonus, position_x, position_y, total_prey, prey_remaining) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      `INSERT INTO territories (
+        name, terrain_type, description, resource_bonus, position_x, position_y,
+        prey_capacity, prey_remaining, shelter_yield, village_yield, city_yield, total_prey
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         territory.name,
         territory.terrain_type,
@@ -43,8 +46,12 @@ async function insertTerritories() {
         territory.resource_bonus,
         territory.position_x,
         territory.position_y,
-        territory.total_prey,
-        territory.total_prey
+        territory.prey_capacity,
+        territory.prey_capacity,
+        territory.shelter_yield,
+        territory.village_yield,
+        territory.city_yield,
+        territory.prey_capacity
       ]
     );
     territoryIdsByName[territory.name] = result.lastID;
@@ -95,11 +102,11 @@ async function insertPlayersWithConfig(territoryIdsByName, playerList) {
   for (const player of filteredPlayerList) {
     await run(
       hasSacredAwareness
-        ? 'INSERT INTO players (name, tribe, resources, current_territory_id, has_moved_this_turn, has_gathered_this_turn, sacred_awareness) VALUES (?, ?, ?, ?, ?, ?, ?)'
-        : 'INSERT INTO players (name, tribe, resources, current_territory_id, has_moved_this_turn, has_gathered_this_turn) VALUES (?, ?, ?, ?, ?, ?)',
+        ? 'INSERT INTO players (name, tribe, resources, current_territory_id, has_moved_this_turn, has_gathered_this_turn, shelters_to_place, sacred_awareness) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        : 'INSERT INTO players (name, tribe, resources, current_territory_id, has_moved_this_turn, has_gathered_this_turn, shelters_to_place) VALUES (?, ?, ?, ?, ?, ?, ?)',
       hasSacredAwareness
-        ? [player.name, player.tribe, player.resources, territoryIdsByName[player.starting_territory] ?? null, 0, 0, 0]
-        : [player.name, player.tribe, player.resources, territoryIdsByName[player.starting_territory] ?? null, 0, 0]
+        ? [player.name, player.tribe, player.resources, territoryIdsByName[player.starting_territory] ?? null, 0, 0, 6, 0]
+        : [player.name, player.tribe, player.resources, territoryIdsByName[player.starting_territory] ?? null, 0, 0, 6]
     );
   }
 

@@ -81,6 +81,9 @@ function ensurePlayerColumns() {
       if (!columnNames.has('has_gathered_this_turn')) {
         statements.push('ALTER TABLE players ADD COLUMN has_gathered_this_turn INTEGER NOT NULL DEFAULT 0');
       }
+      if (!columnNames.has('shelters_to_place')) {
+        statements.push('ALTER TABLE players ADD COLUMN shelters_to_place INTEGER NOT NULL DEFAULT 6');
+      }
 
       const runNext = () => {
         if (statements.length === 0) {
@@ -132,8 +135,20 @@ function ensureTerritoryColumns() {
       if (!columnNames.has('total_prey')) {
         statements.push('ALTER TABLE territories ADD COLUMN total_prey INTEGER NOT NULL DEFAULT 0');
       }
+      if (!columnNames.has('prey_capacity')) {
+        statements.push('ALTER TABLE territories ADD COLUMN prey_capacity INTEGER NOT NULL DEFAULT 0');
+      }
       if (!columnNames.has('prey_remaining')) {
         statements.push('ALTER TABLE territories ADD COLUMN prey_remaining INTEGER NOT NULL DEFAULT 0');
+      }
+      if (!columnNames.has('shelter_yield')) {
+        statements.push('ALTER TABLE territories ADD COLUMN shelter_yield INTEGER NOT NULL DEFAULT 0');
+      }
+      if (!columnNames.has('village_yield')) {
+        statements.push('ALTER TABLE territories ADD COLUMN village_yield INTEGER NOT NULL DEFAULT 0');
+      }
+      if (!columnNames.has('city_yield')) {
+        statements.push('ALTER TABLE territories ADD COLUMN city_yield INTEGER NOT NULL DEFAULT 0');
       }
 
       const runNext = () => {
@@ -185,8 +200,12 @@ function initDb() {
         resource_bonus TEXT NOT NULL,
         position_x INTEGER NOT NULL,
         position_y INTEGER NOT NULL,
+        prey_capacity INTEGER NOT NULL DEFAULT 0,
         total_prey INTEGER NOT NULL DEFAULT 0,
         prey_remaining INTEGER NOT NULL DEFAULT 0,
+        shelter_yield INTEGER NOT NULL DEFAULT 0,
+        village_yield INTEGER NOT NULL DEFAULT 0,
+        city_yield INTEGER NOT NULL DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -198,6 +217,7 @@ function initDb() {
         current_territory_id INTEGER,
         has_moved_this_turn INTEGER NOT NULL DEFAULT 0,
         has_gathered_this_turn INTEGER NOT NULL DEFAULT 0,
+        shelters_to_place INTEGER NOT NULL DEFAULT 6,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(current_territory_id) REFERENCES territories(id)
       );

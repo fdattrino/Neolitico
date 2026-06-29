@@ -191,6 +191,14 @@ button:disabled {
   font-weight: 700;
 }
 
+.territory-yields {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0 0 0.75rem;
+  color: #4b5563;
+  font-size: 0.9rem;
+}
+
 .territory-players {
   display: flex;
   flex-wrap: wrap;
@@ -261,7 +269,10 @@ button:disabled {
 }
 
 .territory-actions {
-  margin-top: 0.7rem;
+  margin-top: 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 .card-list {

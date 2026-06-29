@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-function MapBoard({ players, territories, developments, currentPlayerId, onMove, onBattle }) {
+function MapBoard({ players, territories, developments, currentPlayerId, onMove, onBattle, onPlaceShelter }) {
   const [error, setError] = useState('');
   const [selectedTerritoryIds, setSelectedTerritoryIds] = useState({});
   const [moveSelections, setMoveSelections] = useState({});
@@ -117,6 +117,18 @@ function MapBoard({ players, territories, developments, currentPlayerId, onMove,
     }
   };
 
+  const handlePlaceShelter = async (playerId, territoryId) => {
+    try {
+      setError('');
+      await onPlaceShelter(playerId, territoryId);
+    } catch (err) {
+      setError(err.message || 'Collocazione riparo non riuscita');
+    }
+  };
+
+  const activePlayer = players.find((player) => Number(player.id) === activePlayerId) || null;
+  const activePlayerInPlacementPhase = Number(activePlayer?.shelters_to_place ?? 0) > 0;
+
   const canBattleInTerritory = (territory) => {
     if (Number(territory.prey_remaining ?? 0) !== 0) {
       return false;
@@ -147,7 +159,12 @@ function MapBoard({ players, territories, developments, currentPlayerId, onMove,
               <span className="territory-type">{territory.terrain_type}</span>
             </div>
             <p className="territory-description">{territory.description}</p>
-            <p className="territory-prey">Prede: {territory.prey_remaining} / {territory.total_prey}</p>
+            <p className="territory-prey">Prede: {territory.prey_remaining} / {territory.prey_capacity}</p>
+            <div className="territory-yields">
+              <span>Riparo: +{territory.shelter_yield}</span>
+              <span>Villaggio: +{territory.village_yield}</span>
+              <span>Città: +{territory.city_yield}</span>
+            </div>
             <div className="territory-players">
               {(playersByTerritory[territory.id] || []).length > 0 ? (
                 playersByTerritory[territory.id].map((playerName) => (
@@ -174,6 +191,11 @@ function MapBoard({ players, territories, developments, currentPlayerId, onMove,
                 <button onClick={() => handleBattle(territory.id)}>Battaglia</button>
               </div>
             )}
+            {activePlayerInPlacementPhase && (
+              <div className="territory-actions">
+                <button onClick={() => handlePlaceShelter(activePlayer.id, territory.id)}>Colloca riparo</button>
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -187,7 +209,8 @@ function MapBoard({ players, territories, developments, currentPlayerId, onMove,
           const selection = moveSelections[player.id] || { sheltersToMove: 0, villagesToMove: 0 };
           const isActivePlayer = Number(player.id) === activePlayerId;
           const hasMovedThisTurn = Number(player.has_moved_this_turn) === 1;
-          const moveDisabled = !isActivePlayer || hasMovedThisTurn || reachableTerritories.length === 0 || !selectedTerritoryIds[player.id];
+          const isPlacementPhase = Number(player.shelters_to_place ?? 0) > 0;
+          const moveDisabled = !isActivePlayer || isPlacementPhase || hasMovedThisTurn || reachableTerritories.length === 0 || !selectedTerritoryIds[player.id];
 
           return (
             <div key={player.id} className="move-control">
@@ -196,7 +219,7 @@ function MapBoard({ players, territories, developments, currentPlayerId, onMove,
               <select
                 value={selectedTerritoryIds[player.id] || ''}
                 onChange={(event) => setSelectedTerritoryIds((current) => ({ ...current, [player.id]: event.target.value }))}
-                disabled={!isActivePlayer || hasMovedThisTurn || reachableTerritories.length === 0}
+                disabled={!isActivePlayer || isPlacementPhase || hasMovedThisTurn || reachableTerritories.length === 0}
               >
                 <option value="">{reachableTerritories.length > 0 ? 'Seleziona territorio' : 'Nessun territorio adiacente'}</option>
                 {reachableTerritories.map((territory) => (
@@ -216,7 +239,7 @@ function MapBoard({ players, territories, developments, currentPlayerId, onMove,
                       villagesToMove: Number(current[player.id]?.villagesToMove ?? selection.villagesToMove ?? 0)
                     }
                   }))}
-                  disabled={!isActivePlayer || hasMovedThisTurn || maxShelters === 0}
+                  disabled={!isActivePlayer || isPlacementPhase || hasMovedThisTurn || maxShelters === 0}
                 >
                   {Array.from({ length: maxShelters + 1 }, (_, index) => (
                     <option key={`shelters-${player.id}-${index}`} value={index}>
@@ -236,7 +259,7 @@ function MapBoard({ players, territories, developments, currentPlayerId, onMove,
                       villagesToMove: Number(event.target.value)
                     }
                   }))}
-                  disabled={!isActivePlayer || hasMovedThisTurn || maxVillages === 0}
+                  disabled={!isActivePlayer || isPlacementPhase || hasMovedThisTurn || maxVillages === 0}
                 >
                   {Array.from({ length: maxVillages + 1 }, (_, index) => (
                     <option key={`villages-${player.id}-${index}`} value={index}>
@@ -247,6 +270,7 @@ function MapBoard({ players, territories, developments, currentPlayerId, onMove,
               </label>
               <button onClick={() => handleMove(player.id)} disabled={moveDisabled}>Sposta</button>
               {!isActivePlayer && <span className="turn-waiting">In attesa del turno</span>}
+              {isActivePlayer && isPlacementPhase && <span className="turn-waiting">Colloca prima i ripari iniziali</span>}
               {isActivePlayer && hasMovedThisTurn && <span className="turn-waiting">Spostamento già effettuato</span>}
               {isActivePlayer && reachableTerritories.length === 0 && <span className="turn-waiting">Nessun territorio adiacente disponibile</span>}
             </div>

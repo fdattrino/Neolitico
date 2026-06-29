@@ -1,21 +1,3 @@
-const TERRITORY_RESOURCE_BONUSES = {
-  Foresta: 8,
-  Fiume: 7,
-  Collina: 6,
-  Pianura: 9,
-  Lago: 7,
-  Montagna: 6,
-  Costa: 8,
-  Grotta: 5,
-  Valle: 8
-};
-
-const DEVELOPMENT_RESOURCE_BONUSES = {
-  shelter: 2,
-  village: 5,
-  city: 10
-};
-
 function PlayerPanel({
   players,
   territories,
@@ -40,19 +22,22 @@ function PlayerPanel({
       return null;
     }
 
-    const territoryBonus = TERRITORY_RESOURCE_BONUSES[territory.name] || 0;
     const development = getDevelopment(player);
-    const developmentBonus = development
-      ? (Number(development.shelters) * DEVELOPMENT_RESOURCE_BONUSES.shelter)
-        + (Number(development.villages) * DEVELOPMENT_RESOURCE_BONUSES.village)
-        + (Number(development.cities) * DEVELOPMENT_RESOURCE_BONUSES.city)
-      : 0;
+    const shelters = Number(development?.shelters ?? 0);
+    const villages = Number(development?.villages ?? 0);
+    const cities = Number(development?.cities ?? 0);
+    const preyRemaining = Number(territory.prey_remaining ?? 0);
+    const activeShelters = Math.min(shelters, preyRemaining);
+    const shelterProduction = activeShelters * Number(territory.shelter_yield ?? 0);
+    const villageProduction = villages * Number(territory.village_yield ?? 0);
+    const cityProduction = cities * Number(territory.city_yield ?? 0);
 
     return {
-      total: territoryBonus + developmentBonus,
-      territoryBonus,
-      developmentBonus,
-      preyRemaining: Number(territory.prey_remaining ?? 0)
+      total: shelterProduction + villageProduction + cityProduction,
+      preyRemaining,
+      shelterProduction,
+      villageProduction,
+      cityProduction
     };
   };
 
@@ -68,17 +53,21 @@ function PlayerPanel({
           const shelters = Number(development?.shelters ?? 0);
           const villages = Number(development?.villages ?? 0);
           const cities = Number(development?.cities ?? 0);
-          const gatherDisabled = !isActivePlayer || hasGatheredThisTurn || Number(gatherData?.preyRemaining ?? 0) <= 0;
-          const canBuildShelter = isActivePlayer && Number(player.resources) >= 5;
-          const canUpgradeVillage = isActivePlayer && shelters >= 3;
-          const canUpgradeCity = isActivePlayer && villages >= 3 && Number(player.resources) >= 40;
+          const sheltersToPlace = Number(player.shelters_to_place ?? 0);
+          const isPlacementPhase = sheltersToPlace > 0;
+          const gatherDisabled = !isActivePlayer || isPlacementPhase || hasGatheredThisTurn || Number(gatherData?.total ?? 0) <= 0;
+          const canBuildShelter = isActivePlayer && !isPlacementPhase && Number(player.resources) >= 5;
+          const canUpgradeVillage = isActivePlayer && !isPlacementPhase && shelters >= 3;
+          const canUpgradeCity = isActivePlayer && !isPlacementPhase && villages >= 3 && Number(player.resources) >= 40;
 
           const gatherLabel = !isActivePlayer
             ? 'In attesa del turno'
+            : isPlacementPhase
+              ? 'Colloca prima i ripari iniziali'
             : hasGatheredThisTurn
               ? 'Risorse già raccolte'
-              : Number(gatherData?.preyRemaining ?? 0) <= 0
-                ? 'Prede esaurite'
+              : Number(gatherData?.total ?? 0) <= 0
+                ? 'Nessuna produzione disponibile'
                 : gatherData
                   ? `Raccogli risorse (+${gatherData.total})`
                   : 'Raccogli risorse';
@@ -89,19 +78,20 @@ function PlayerPanel({
               <p><strong>Tribù:</strong> {player.tribe}</p>
               <p><strong>Risorse:</strong> {player.resources}</p>
               <p><strong>Territorio:</strong> {player.current_territory_name || 'Nessuno'}</p>
+              <p><strong>Ripari da collocare:</strong> {sheltersToPlace}</p>
               <p><strong>Sviluppo locale:</strong> {shelters} ripari, {villages} villaggi, {cities} città</p>
               <div className="actions player-actions">
                 <button onClick={() => onGather(player.id)} disabled={gatherDisabled}>
                   {gatherLabel}
                 </button>
                 <button onClick={() => onBuildShelter(player.id)} disabled={!canBuildShelter}>
-                  {!isActivePlayer ? 'In attesa del turno' : Number(player.resources) < 5 ? 'Servono 5 risorse' : 'Costruisci riparo'}
+                  {!isActivePlayer ? 'In attesa del turno' : isPlacementPhase ? 'Disponibile dopo la collocazione iniziale' : Number(player.resources) < 5 ? 'Servono 5 risorse' : 'Costruisci riparo'}
                 </button>
                 <button onClick={() => onUpgradeVillage(player.id)} disabled={!canUpgradeVillage}>
-                  {!isActivePlayer ? 'In attesa del turno' : shelters < 3 ? 'Servono 3 ripari' : 'Forma villaggio'}
+                  {!isActivePlayer ? 'In attesa del turno' : isPlacementPhase ? 'Disponibile dopo la collocazione iniziale' : shelters < 3 ? 'Servono 3 ripari' : 'Forma villaggio'}
                 </button>
                 <button onClick={() => onUpgradeCity(player.id)} disabled={!canUpgradeCity}>
-                  {!isActivePlayer ? 'In attesa del turno' : villages < 3 ? 'Servono 3 villaggi' : Number(player.resources) < 40 ? 'Servono 40 risorse' : 'Fonda città'}
+                  {!isActivePlayer ? 'In attesa del turno' : isPlacementPhase ? 'Disponibile dopo la collocazione iniziale' : villages < 3 ? 'Servono 3 villaggi' : Number(player.resources) < 40 ? 'Servono 40 risorse' : 'Fonda città'}
                 </button>
               </div>
             </div>

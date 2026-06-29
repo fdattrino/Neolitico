@@ -1,13 +1,13 @@
 const territories = [
-  { name: 'Foresta', terrain_type: 'bosco', description: 'Territorio ricco di caccia, legna e frutti selvatici.', resource_bonus: 'caccia', position_x: 0, position_y: 0, total_prey: 10 },
-  { name: 'Fiume', terrain_type: 'acqua', description: 'Favorisce pesca, irrigazione e spostamenti.', resource_bonus: 'pesca', position_x: 1, position_y: 0, total_prey: 7 },
-  { name: 'Collina', terrain_type: 'altura', description: 'Zona adatta alla difesa e alla ricerca di selce.', resource_bonus: 'selce', position_x: 2, position_y: 0, total_prey: 6 },
-  { name: 'Pianura', terrain_type: 'pianura', description: 'Territorio favorevole all\'agricoltura.', resource_bonus: 'agricoltura', position_x: 0, position_y: 1, total_prey: 8 },
-  { name: 'Lago', terrain_type: 'acqua', description: 'Offre pesca, canneti e risorse alimentari.', resource_bonus: 'pesca', position_x: 1, position_y: 1, total_prey: 8 },
-  { name: 'Montagna', terrain_type: 'montagna', description: 'Territorio difficile ma ricco di pietra e minerali.', resource_bonus: 'pietra', position_x: 2, position_y: 1, total_prey: 5 },
-  { name: 'Costa', terrain_type: 'mare', description: 'Offre crostacei, pesca e contatti con altri gruppi.', resource_bonus: 'crostacei', position_x: 0, position_y: 2, total_prey: 9 },
-  { name: 'Grotta', terrain_type: 'riparo', description: 'Luogo di rifugio, pitture rupestri e riti.', resource_bonus: 'riparo', position_x: 1, position_y: 2, total_prey: 5 },
-  { name: 'Valle', terrain_type: 'valle', description: 'Area adatta alla nascita di villaggi stabili.', resource_bonus: 'insediamento', position_x: 2, position_y: 2, total_prey: 8 }
+  { name: 'Foresta', terrain_type: 'bosco', description: 'Territorio ricco di caccia, legna e frutti selvatici.', resource_bonus: 'caccia', position_x: 0, position_y: 0, prey_capacity: 10, shelter_yield: 6, village_yield: 7, city_yield: 25 },
+  { name: 'Fiume', terrain_type: 'acqua', description: 'Favorisce pesca, irrigazione e spostamenti.', resource_bonus: 'pesca', position_x: 1, position_y: 0, prey_capacity: 9, shelter_yield: 4, village_yield: 14, city_yield: 50 },
+  { name: 'Collina', terrain_type: 'altura', description: 'Zona adatta alla difesa e alla ricerca di selce.', resource_bonus: 'selce', position_x: 2, position_y: 0, prey_capacity: 8, shelter_yield: 4, village_yield: 7, city_yield: 25 },
+  { name: 'Pianura', terrain_type: 'pianura', description: 'Territorio favorevole all\'agricoltura.', resource_bonus: 'agricoltura', position_x: 0, position_y: 1, prey_capacity: 8, shelter_yield: 2, village_yield: 21, city_yield: 75 },
+  { name: 'Lago', terrain_type: 'acqua', description: 'Offre pesca, canneti e risorse alimentari.', resource_bonus: 'pesca', position_x: 1, position_y: 1, prey_capacity: 9, shelter_yield: 4, village_yield: 14, city_yield: 50 },
+  { name: 'Montagna', terrain_type: 'montagna', description: 'Territorio difficile ma ricco di pietra e minerali.', resource_bonus: 'pietra', position_x: 2, position_y: 1, prey_capacity: 8, shelter_yield: 6, village_yield: 7, city_yield: 25 },
+  { name: 'Costa', terrain_type: 'mare', description: 'Offre crostacei, pesca e contatti con altri gruppi.', resource_bonus: 'crostacei', position_x: 0, position_y: 2, prey_capacity: 10, shelter_yield: 6, village_yield: 14, city_yield: 50 },
+  { name: 'Grotta', terrain_type: 'riparo', description: 'Luogo di rifugio, pitture rupestri e riti.', resource_bonus: 'riparo', position_x: 1, position_y: 2, prey_capacity: 8, shelter_yield: 4, village_yield: 7, city_yield: 25 },
+  { name: 'Valle', terrain_type: 'valle', description: 'Area adatta alla nascita di villaggi stabili.', resource_bonus: 'insediamento', position_x: 2, position_y: 2, prey_capacity: 9, shelter_yield: 2, village_yield: 21, city_yield: 75 }
 ];
 
 const players = [
