@@ -186,12 +186,12 @@ function App() {
     );
   };
 
-  const movePlayer = (playerId, territoryId, sheltersToMove = 0, villagesToMove = 0) => (
+  const movePlayer = (playerId, sourceTerritoryId, territoryId, sheltersToMove = 0, villagesToMove = 0) => (
     performAction(
       () => fetch(`${API_BASE}/players/${playerId}/move`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ territoryId, sheltersToMove, villagesToMove })
+        body: JSON.stringify({ sourceTerritoryId, territoryId, sheltersToMove, villagesToMove })
       }),
       'Spostamento completato.',
       'Spostamento non riuscito'
@@ -246,22 +246,24 @@ function App() {
     )
   );
 
-  const upgradeToVillage = (playerId) => (
+  const upgradeToVillage = (playerId, territoryId) => (
     performAction(
       () => fetch(`${API_BASE}/players/${playerId}/upgrade-to-village`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ territoryId })
       }),
       'Villaggio formato con successo.',
       'Formazione villaggio non riuscita'
     )
   );
 
-  const upgradeToCity = (playerId) => (
+  const upgradeToCity = (playerId, territoryId) => (
     performAction(
       () => fetch(`${API_BASE}/players/${playerId}/upgrade-to-city`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ territoryId })
       }),
       'Città fondata con successo.',
       'Fondazione città non riuscita'
@@ -281,15 +283,19 @@ function App() {
   const nextPhase = currentPhase === 'setup_placement'
     ? (isLastPlayerInOrder ? 'production' : 'setup_placement')
     : currentPhaseIndex >= 0
-      ? (currentPhase === 'transformation'
-        ? 'production'
-        : TURN_PHASE_ORDER[currentPhaseIndex + 1] || 'production')
+      ? (isLastPlayerInOrder
+        ? (currentPhase === 'transformation'
+          ? 'production'
+          : TURN_PHASE_ORDER[currentPhaseIndex + 1] || 'production')
+        : currentPhase)
       : 'production';
   const advanceButtonLabel = currentPlayer && nextPlayer
     ? `${PHASE_LABELS[currentPhase] || currentPhase} ${currentPlayer.name} -> ${PHASE_LABELS[nextPhase] || nextPhase} ${nextPlayer.name}`
     : 'Avanza fase';
   const canAdvanceSetupPlacement = currentPhase !== 'setup_placement'
     || Number(currentPlayer?.shelters_to_place ?? 0) === 0;
+  const advancePhaseDisabled = currentPhase === 'population'
+    || !canAdvanceSetupPlacement;
 
   return (
     <div className="app-shell">
@@ -328,7 +334,7 @@ function App() {
               {currentPhase === 'post_movement_check' && (
                 <button onClick={verifyPostMovement}>Verifica conflitti</button>
               )}
-              <button onClick={advancePhase} disabled={!canAdvanceSetupPlacement}>
+              <button onClick={advancePhase} disabled={advancePhaseDisabled}>
                 {advanceButtonLabel}
               </button>
             </div>
@@ -343,8 +349,6 @@ function App() {
                 currentPhase={currentPhase}
                 onGather={gatherResources}
                 onBuildShelter={buildShelter}
-                onUpgradeVillage={upgradeToVillage}
-                onUpgradeCity={upgradeToCity}
               />
             </section>
             <section className="panel map-panel">
@@ -357,6 +361,8 @@ function App() {
                 onMove={movePlayer}
                 onBattle={battleInTerritory}
                 onPlaceShelter={placeShelter}
+                onUpgradeVillage={upgradeToVillage}
+                onUpgradeCity={upgradeToCity}
               />
             </section>
             <div className="bottom-layout">

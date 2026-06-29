@@ -284,6 +284,13 @@ async function updateGameTurnState(gameStateId, currentPlayerId, round, phase) {
   );
 }
 
+async function buildAdvancedPhasePayload(nextState, extraData = {}) {
+  return {
+    ...(await buildSharedPayload(nextState?.current_player_id)),
+    ...extraData
+  };
+}
+
 async function requireGamePhase(expectedPhases, res, actionLabel) {
   const gameState = await ensureValidGameState();
   const acceptedPhases = Array.isArray(expectedPhases) ? expectedPhases : [expectedPhases];
@@ -632,7 +639,8 @@ async function handleBuildShelter(req, res) {
       JSON.stringify({ territoryId: territory.id, territoryName: territory.name, shelters: updatedDevelopment.shelters, buildCost: BUILD_SHELTER_COST })
     ]);
 
-    res.json({ success: true, data: await buildSharedPayload(playerId) });
+    const nextState = await advanceTurnPhase();
+    res.json({ success: true, data: await buildSharedPayload(nextState.current_player_id) });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -848,11 +856,12 @@ router.post('/territories/:id/battle', async (req, res) => {
       })
     ]);
 
+    const nextState = await advanceTurnPhase();
     res.json({
       success: true,
       data: {
         territory,
-        ...(await buildSharedPayload())
+        ...(await buildSharedPayload(nextState.current_player_id))
       }
     });
   } catch (error) {
@@ -939,7 +948,8 @@ router.post('/players/:id/buy-belief', async (req, res) => {
       })
     ]);
 
-    res.json({ success: true, data: await buildSharedPayload(playerId) });
+    const nextState = await advanceTurnPhase();
+    res.json({ success: true, data: await buildSharedPayload(nextState.current_player_id) });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -948,12 +958,13 @@ router.post('/players/:id/buy-belief', async (req, res) => {
 router.post('/players/:id/move', async (req, res) => {
   try {
     const playerId = Number(req.params.id);
+    const sourceTerritoryId = Number(req.body.sourceTerritoryId);
     const territoryId = Number(req.body.territoryId);
     const sheltersToMove = Number(req.body.sheltersToMove ?? 0);
     const villagesToMove = Number(req.body.villagesToMove ?? 0);
 
-    if (Number.isNaN(playerId) || Number.isNaN(territoryId)) {
-      return res.status(400).json({ success: false, error: 'Valid player id and territory id are required.' });
+    if (Number.isNaN(playerId) || Number.isNaN(sourceTerritoryId) || Number.isNaN(territoryId)) {
+      return res.status(400).json({ success: false, error: 'Valid player id, source territory id and destination territory id are required.' });
     }
 
     if (Number.isNaN(sheltersToMove) || Number.isNaN(villagesToMove) || sheltersToMove < 0 || villagesToMove < 0) {
@@ -987,29 +998,33 @@ router.post('/players/:id/move', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Hai già effettuato uno spostamento in questo turno.' });
     }
 
-    const currentTerritory = await get('SELECT * FROM territories WHERE id = ?', [player.current_territory_id]);
+    const sourceTerritory = await get('SELECT * FROM territories WHERE id = ?', [sourceTerritoryId]);
     const territory = await get('SELECT * FROM territories WHERE id = ?', [territoryId]);
-    const sourceDevelopment = await fetchPlayerDevelopmentInTerritory(playerId, player.current_territory_id);
+    const sourceDevelopment = await fetchPlayerDevelopmentInTerritory(playerId, sourceTerritoryId);
 
     if (!territory) {
       return res.status(404).json({ success: false, error: 'Territory not found.' });
     }
 
-    if (!currentTerritory) {
-      return res.status(404).json({ success: false, error: 'Current territory not found.' });
+    if (!sourceTerritory) {
+      return res.status(404).json({ success: false, error: 'Source territory not found.' });
     }
 
-    if (Number(player.current_territory_id) === Number(territoryId)) {
-      return res.status(400).json({ success: false, error: 'Sei già in questo territorio.' });
+    if (Number(sourceTerritoryId) === Number(territoryId)) {
+      return res.status(400).json({ success: false, error: 'Il territorio di partenza deve essere diverso da quello di destinazione.' });
     }
 
-    const distance = Math.abs(territory.position_x - currentTerritory.position_x) + Math.abs(territory.position_y - currentTerritory.position_y);
+    const distance = Math.abs(territory.position_x - sourceTerritory.position_x) + Math.abs(territory.position_y - sourceTerritory.position_y);
     if (distance !== 1) {
       return res.status(400).json({ success: false, error: 'Puoi spostarti solo in un territorio adiacente.' });
     }
 
     const availableShelters = Number(sourceDevelopment?.shelters ?? 0);
     const availableVillages = Number(sourceDevelopment?.villages ?? 0);
+
+    if (availableShelters <= 0 && availableVillages <= 0) {
+      return res.status(400).json({ success: false, error: 'Il territorio di partenza non contiene ripari o villaggi da spostare.' });
+    }
 
     if (sheltersToMove > availableShelters) {
       return res.status(400).json({ success: false, error: 'Non puoi spostare più ripari di quelli posseduti nel territorio di partenza.' });
@@ -1051,10 +1066,10 @@ router.post('/players/:id/move', async (req, res) => {
 
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
       playerId,
-      `${player.name} si sposta da ${currentTerritory.name} a ${territory.name} ${transferText}.`,
+      `${player.name} si sposta da ${sourceTerritory.name} a ${territory.name} ${transferText}.`,
       JSON.stringify({
-        fromTerritoryId: currentTerritory.id,
-        fromTerritoryName: currentTerritory.name,
+        fromTerritoryId: sourceTerritory.id,
+        fromTerritoryName: sourceTerritory.name,
         territoryId,
         territoryName: territory.name,
         sheltersToMove,
@@ -1063,7 +1078,8 @@ router.post('/players/:id/move', async (req, res) => {
       })
     ]);
 
-    res.json({ success: true, data: await buildSharedPayload(playerId) });
+    const nextState = await advanceTurnPhase();
+    res.json({ success: true, data: await buildSharedPayload(nextState.current_player_id) });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -1148,12 +1164,10 @@ router.post('/players/:id/gather', async (req, res) => {
       })
     ]);
 
+    const nextState = await advanceTurnPhase();
     res.json({
       success: true,
-      data: {
-        ...(await buildSharedPayload(playerId)),
-        production
-      }
+      data: await buildAdvancedPhasePayload(nextState, { production })
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -1197,11 +1211,12 @@ router.post('/players/:id/maintenance', async (req, res) => {
 
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
       playerId,
-      `${result.playerName} paga il mantenimento: -${result.paidAmount} risorse.${lossText}`,
+      `${result.playerName} paga ${result.paidAmount} risorse di mantenimento.${lossText}`,
       JSON.stringify(result)
     ]);
 
-    res.json({ success: true, data: await buildSharedPayload(playerId) });
+    const nextState = await advanceTurnPhase();
+    res.json({ success: true, data: await buildSharedPayload(nextState.current_player_id) });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -1210,9 +1225,14 @@ router.post('/players/:id/maintenance', async (req, res) => {
 router.post('/players/:id/upgrade-to-village', async (req, res) => {
   try {
     const playerId = Number(req.params.id);
+    const territoryId = Number(req.body?.territoryId);
 
     if (Number.isNaN(playerId)) {
       return res.status(400).json({ success: false, error: 'Valid player id is required.' });
+    }
+
+    if (Number.isNaN(territoryId)) {
+      return res.status(400).json({ success: false, error: 'territoryId is required.' });
     }
 
     const gameState = await requireCurrentPlayer(playerId, res);
@@ -1234,16 +1254,12 @@ router.post('/players/:id/upgrade-to-village', async (req, res) => {
       return;
     }
 
-    if (!player.current_territory_id) {
-      return res.status(400).json({ success: false, error: 'Player is not currently in a territory.' });
-    }
-
-    const territory = await get('SELECT * FROM territories WHERE id = ?', [player.current_territory_id]);
+    const territory = await get('SELECT * FROM territories WHERE id = ?', [territoryId]);
     if (!territory) {
-      return res.status(404).json({ success: false, error: 'Current territory not found.' });
+      return res.status(404).json({ success: false, error: 'Territory not found.' });
     }
 
-    const development = await fetchPlayerDevelopmentInTerritory(playerId, territory.id);
+    const development = await fetchPlayerDevelopmentInTerritory(playerId, territoryId);
     if (!development || Number(development.shelters) < 3) {
       return res.status(400).json({ success: false, error: 'Servono 3 ripari per formare un villaggio.' });
     }
@@ -1260,7 +1276,8 @@ router.post('/players/:id/upgrade-to-village', async (req, res) => {
       JSON.stringify({ territoryId: territory.id, territoryName: territory.name, sheltersSpent: 3, villagesGained: 1, resourceCost: FORM_VILLAGE_COST })
     ]);
 
-    res.json({ success: true, data: await buildSharedPayload(playerId) });
+    const nextState = await advanceTurnPhase();
+    res.json({ success: true, data: await buildSharedPayload(nextState.current_player_id) });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -1269,9 +1286,14 @@ router.post('/players/:id/upgrade-to-village', async (req, res) => {
 router.post('/players/:id/upgrade-to-city', async (req, res) => {
   try {
     const playerId = Number(req.params.id);
+    const territoryId = Number(req.body?.territoryId);
 
     if (Number.isNaN(playerId)) {
       return res.status(400).json({ success: false, error: 'Valid player id is required.' });
+    }
+
+    if (Number.isNaN(territoryId)) {
+      return res.status(400).json({ success: false, error: 'territoryId is required.' });
     }
 
     const gameState = await requireCurrentPlayer(playerId, res);
@@ -1293,16 +1315,12 @@ router.post('/players/:id/upgrade-to-city', async (req, res) => {
       return;
     }
 
-    if (!player.current_territory_id) {
-      return res.status(400).json({ success: false, error: 'Player is not currently in a territory.' });
-    }
-
-    const territory = await get('SELECT * FROM territories WHERE id = ?', [player.current_territory_id]);
+    const territory = await get('SELECT * FROM territories WHERE id = ?', [territoryId]);
     if (!territory) {
-      return res.status(404).json({ success: false, error: 'Current territory not found.' });
+      return res.status(404).json({ success: false, error: 'Territory not found.' });
     }
 
-    const development = await fetchPlayerDevelopmentInTerritory(playerId, territory.id);
+    const development = await fetchPlayerDevelopmentInTerritory(playerId, territoryId);
     if (!development || Number(development.villages) < 3) {
       return res.status(400).json({ success: false, error: 'Servono 3 villaggi per fondare una città.' });
     }
@@ -1319,7 +1337,8 @@ router.post('/players/:id/upgrade-to-city', async (req, res) => {
       JSON.stringify({ territoryId: territory.id, territoryName: territory.name, villagesSpent: 3, citiesGained: 1, resourceCost: FOUND_CITY_COST })
     ]);
 
-    res.json({ success: true, data: await buildSharedPayload(playerId) });
+    const nextState = await advanceTurnPhase();
+    res.json({ success: true, data: await buildSharedPayload(nextState.current_player_id) });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -1427,12 +1446,10 @@ router.post('/players/:id/draw-event', async (req, res) => {
       JSON.stringify({ eventCardId: eventCard.id, effectType: eventCard.effect_type, effectValue: eventCard.effect_value })
     ]);
 
+    const nextState = await advanceTurnPhase();
     res.json({
       success: true,
-      data: {
-        ...(await buildSharedPayload(playerId)),
-        event: eventCard
-      }
+      data: await buildAdvancedPhasePayload(nextState, { event: eventCard })
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -1462,13 +1479,78 @@ router.post('/players/:id/population', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Player not found.' });
     }
 
+    const playerDevelopments = await all(
+      `SELECT territory_development.id, territory_development.territory_id,
+              territory_development.shelters, territory_development.villages, territory_development.cities,
+              territories.name AS territory_name
+       FROM territory_development
+       INNER JOIN territories ON territories.id = territory_development.territory_id
+       WHERE territory_development.player_id = ?
+       ORDER BY territories.position_y, territories.position_x, territory_development.id`,
+      [playerId]
+    );
+
+    const activeDevelopments = playerDevelopments.filter((development) => (
+      Number(development.shelters ?? 0) > 0
+      || Number(development.villages ?? 0) > 0
+      || Number(development.cities ?? 0) > 0
+    ));
+
+    if (activeDevelopments.length === 0) {
+      await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+        playerId,
+        `${player.name} non ha insediamenti che generano crescita.`,
+        JSON.stringify({ phase: 'population', playerId, territories: [] })
+      ]);
+
+      const nextState = await advanceTurnPhase();
+      return res.json({ success: true, data: await buildSharedPayload(nextState.current_player_id) });
+    }
+
+    const growthResults = [];
+
+    for (const development of activeDevelopments) {
+      const shelters = Number(development.shelters ?? 0);
+      const villages = Number(development.villages ?? 0);
+      const cities = Number(development.cities ?? 0);
+      const newShelters = Math.floor(shelters / 3) + villages + (cities * 4);
+
+      if (newShelters > 0) {
+        await run(
+          'UPDATE territory_development SET shelters = shelters + ? WHERE id = ?',
+          [newShelters, development.id]
+        );
+      }
+
+      growthResults.push({
+        territoryId: Number(development.territory_id),
+        territoryName: development.territory_name,
+        shelters,
+        villages,
+        cities,
+        newShelters,
+        totalShelters: shelters + newShelters
+      });
+    }
+
+    for (const growth of growthResults) {
+      await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+        playerId,
+        growth.newShelters > 0
+          ? `${player.name} cresce nella ${growth.territoryName}: +${growth.newShelters} ${growth.newShelters === 1 ? 'riparo' : 'ripari'}.`
+          : `Nel territorio ${growth.territoryName} non ci sono nuovi ripari.`,
+        JSON.stringify({ phase: 'population', playerId, ...growth })
+      ]);
+    }
+
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
       playerId,
-      `${player.name} gestisce la crescita della popolazione.`,
-      JSON.stringify({ phase: 'population', playerId })
+      `${player.name} completa la crescita della popolazione.`,
+      JSON.stringify({ phase: 'population', playerId, growthResults })
     ]);
 
-    res.json({ success: true, data: await buildSharedPayload(playerId) });
+    const nextState = await advanceTurnPhase();
+    res.json({ success: true, data: await buildSharedPayload(nextState.current_player_id) });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -1497,13 +1579,18 @@ router.post('/turn/post-movement-check', async (_req, res) => {
       JSON.stringify({ contested })
     ]);
 
-    res.json({ success: true, data: { contested, ...(await buildSharedPayload(gameState.current_player_id)) } });
+    if (contested.length > 0) {
+      return res.json({ success: true, data: { contested, ...(await buildSharedPayload(gameState.current_player_id)) } });
+    }
+
+    const nextState = await advanceTurnPhase();
+    res.json({ success: true, data: { contested, ...(await buildSharedPayload(nextState.current_player_id)) } });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-async function advanceToNextPlayerOrPhase() {
+async function advanceTurnPhase() {
   const gameState = await ensureValidGameState();
   if (!gameState || !gameState.current_player_id) {
     throw new Error('Lo stato della partita non è inizializzato.');
@@ -1563,12 +1650,22 @@ async function advanceToNextPlayerOrPhase() {
     throw new Error(`Fase non riconosciuta: ${currentPhase}.`);
   }
 
+  const currentPlayer = players[currentIndex];
+
   if (!isLastPlayer) {
     await updateGameTurnState(gameState.id, nextPlayer.id, gameState.round, currentPhase);
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
       gameState.current_player_id,
-      `${currentPhase} di ${players[currentIndex].name} completata. Ora tocca a ${nextPlayer.name}.`,
-      JSON.stringify({ fromPlayerId: gameState.current_player_id, toPlayerId: nextPlayer.id, currentPhase })
+      `Fase completata: ${currentPhase} ${currentPlayer.name} → ${currentPhase} ${nextPlayer.name}`,
+      JSON.stringify({
+        fromPlayerId: gameState.current_player_id,
+        fromPlayerName: currentPlayer.name,
+        toPlayerId: nextPlayer.id,
+        toPlayerName: nextPlayer.name,
+        fromPhase: currentPhase,
+        toPhase: currentPhase,
+        round: gameState.round
+      })
     ]);
     return ensureValidGameState();
   }
@@ -1585,10 +1682,17 @@ async function advanceToNextPlayerOrPhase() {
   await updateGameTurnState(gameState.id, firstPlayer.id, nextRound, nextPhase);
   await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
     gameState.current_player_id,
-    currentPhase === 'transformation'
-      ? `Round ${gameState.round} completato. Inizia il round ${nextRound} con Produzione di ${firstPlayer.name}.`
-      : `La fase ${currentPhase} e completata. Ora inizia ${nextPhase} con ${firstPlayer.name}.`,
-    JSON.stringify({ fromPlayerId: gameState.current_player_id, toPlayerId: firstPlayer.id, fromPhase: currentPhase, toPhase: nextPhase, round: nextRound })
+    `Fase completata: ${currentPhase} ${currentPlayer.name} → ${nextPhase} ${firstPlayer.name}`,
+    JSON.stringify({
+      fromPlayerId: gameState.current_player_id,
+      fromPlayerName: currentPlayer.name,
+      toPlayerId: firstPlayer.id,
+      toPlayerName: firstPlayer.name,
+      fromPhase: currentPhase,
+      toPhase: nextPhase,
+      fromRound: gameState.round,
+      toRound: nextRound
+    })
   ]);
 
   return ensureValidGameState();
@@ -1596,7 +1700,7 @@ async function advanceToNextPlayerOrPhase() {
 
 router.post('/phase/next', async (_req, res) => {
   try {
-    res.json({ success: true, data: await advanceToNextPlayerOrPhase() });
+    res.json({ success: true, data: await advanceTurnPhase() });
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
   }
@@ -1604,7 +1708,7 @@ router.post('/phase/next', async (_req, res) => {
 
 router.post('/turn/advance-phase', async (_req, res) => {
   try {
-    res.json({ success: true, data: await advanceToNextPlayerOrPhase() });
+    res.json({ success: true, data: await advanceTurnPhase() });
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
   }
@@ -1621,7 +1725,7 @@ router.get('/log', async (_req, res) => {
 
 router.post('/turn/end', async (_req, res) => {
   try {
-    res.json({ success: true, data: await advanceToNextPlayerOrPhase() });
+    res.json({ success: true, data: await advanceTurnPhase() });
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
   }

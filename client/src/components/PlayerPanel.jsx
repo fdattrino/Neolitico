@@ -5,20 +5,15 @@ function PlayerPanel({
   currentPlayerId,
   currentPhase,
   onGather,
-  onBuildShelter,
-  onUpgradeVillage,
-  onUpgradeCity
+  onBuildShelter
 }) {
   const activePlayerId = Number(currentPlayerId);
-
-  const getDevelopment = (player) => (
-    developments.find(
-      (item) => Number(item.player_id) === Number(player.id) && Number(item.territory_id) === Number(player.current_territory_id)
-    ) || null
+  const getPlayerDevelopments = (player) => (
+    developments.filter((item) => Number(item.player_id) === Number(player.id))
   );
 
   const getExpectedGatherBonus = (player) => {
-    const playerDevelopments = developments.filter((item) => Number(item.player_id) === Number(player.id));
+    const playerDevelopments = getPlayerDevelopments(player);
     if (playerDevelopments.length === 0) {
       return { total: 0, preyRemaining: 0, shelterProduction: 0, villageProduction: 0, cityProduction: 0 };
     }
@@ -54,6 +49,37 @@ function PlayerPanel({
     });
   };
 
+  const getSettlementSummary = (player) => {
+    const playerDevelopments = getPlayerDevelopments(player);
+
+    return playerDevelopments.reduce((summary, development) => {
+      const shelters = Number(development.shelters ?? 0);
+      const villages = Number(development.villages ?? 0);
+      const cities = Number(development.cities ?? 0);
+
+      if (shelters <= 0 && villages <= 0 && cities <= 0) {
+        return summary;
+      }
+
+      summary.totalShelters += shelters;
+      summary.totalVillages += villages;
+      summary.totalCities += cities;
+      summary.territories.push({
+        territoryId: Number(development.territory_id),
+        territoryName: development.territory_name || territories.find((item) => Number(item.id) === Number(development.territory_id))?.name || 'Territorio sconosciuto',
+        shelters,
+        villages,
+        cities
+      });
+      return summary;
+    }, {
+      totalShelters: 0,
+      totalVillages: 0,
+      totalCities: 0,
+      territories: []
+    });
+  };
+
   return (
     <div>
       <h2>Giocatori</h2>
@@ -62,16 +88,11 @@ function PlayerPanel({
           const isActivePlayer = Number(player.id) === activePlayerId;
           const hasGatheredThisTurn = Number(player.has_gathered_this_turn) === 1;
           const gatherData = getExpectedGatherBonus(player);
-          const development = getDevelopment(player);
-          const shelters = Number(development?.shelters ?? 0);
-          const villages = Number(development?.villages ?? 0);
-          const cities = Number(development?.cities ?? 0);
+          const settlementSummary = getSettlementSummary(player);
           const sheltersToPlace = Number(player.shelters_to_place ?? 0);
           const isPlacementPhase = sheltersToPlace > 0;
           const gatherDisabled = currentPhase !== 'production' || !isActivePlayer || isPlacementPhase || hasGatheredThisTurn || Number(gatherData?.total ?? 0) <= 0;
           const canBuildShelter = currentPhase === 'transformation' && isActivePlayer && !isPlacementPhase && Number(player.resources) >= 5;
-          const canUpgradeVillage = currentPhase === 'transformation' && isActivePlayer && !isPlacementPhase && shelters >= 3 && Number(player.resources) >= 8;
-          const canUpgradeCity = currentPhase === 'transformation' && isActivePlayer && !isPlacementPhase && villages >= 3 && Number(player.resources) >= 40;
 
           const gatherLabel = currentPhase !== 'production'
             ? 'Disponibile in Produzione'
@@ -92,21 +113,30 @@ function PlayerPanel({
               <h3>{player.name}</h3>
               <p><strong>Tribù:</strong> {player.tribe}</p>
               <p><strong>Risorse:</strong> {player.resources}</p>
-              <p><strong>Territorio:</strong> {player.current_territory_name || 'Nessuno'}</p>
               <p><strong>Ripari da collocare:</strong> {sheltersToPlace}</p>
-              <p><strong>Sviluppo locale:</strong> {shelters} ripari, {villages} villaggi, {cities} città</p>
+              <p>
+                <strong>Insediamenti totali:</strong> {settlementSummary.totalShelters} ripari, {settlementSummary.totalVillages} villaggi, {settlementSummary.totalCities} città
+              </p>
+              <div className="player-settlements">
+                <strong>Insediamenti:</strong>
+                {settlementSummary.territories.length > 0 ? (
+                  <ul className="player-settlement-list">
+                    {settlementSummary.territories.map((territoryDevelopment) => (
+                      <li key={`${player.id}-${territoryDevelopment.territoryId}`}>
+                        {territoryDevelopment.territoryName}: {territoryDevelopment.shelters} ripari, {territoryDevelopment.villages} villaggi, {territoryDevelopment.cities} città
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="hint">Nessun insediamento</p>
+                )}
+              </div>
               <div className="actions player-actions">
                 <button onClick={() => onGather(player.id)} disabled={gatherDisabled}>
                   {gatherLabel}
                 </button>
                 <button onClick={() => onBuildShelter(player.id)} disabled={!canBuildShelter}>
                   {currentPhase !== 'transformation' ? 'Disponibile in Trasformazione' : !isActivePlayer ? 'In attesa del turno' : isPlacementPhase ? 'Disponibile dopo la collocazione iniziale' : Number(player.resources) < 5 ? 'Servono 5 risorse' : 'Costruisci riparo'}
-                </button>
-                <button onClick={() => onUpgradeVillage(player.id)} disabled={!canUpgradeVillage}>
-                  {currentPhase !== 'transformation' ? 'Disponibile in Trasformazione' : !isActivePlayer ? 'In attesa del turno' : isPlacementPhase ? 'Disponibile dopo la collocazione iniziale' : shelters < 3 ? 'Servono 3 ripari' : Number(player.resources) < 8 ? 'Servono 8 risorse' : 'Forma villaggio'}
-                </button>
-                <button onClick={() => onUpgradeCity(player.id)} disabled={!canUpgradeCity}>
-                  {currentPhase !== 'transformation' ? 'Disponibile in Trasformazione' : !isActivePlayer ? 'In attesa del turno' : isPlacementPhase ? 'Disponibile dopo la collocazione iniziale' : villages < 3 ? 'Servono 3 villaggi' : Number(player.resources) < 40 ? 'Servono 40 risorse' : 'Fonda città'}
                 </button>
               </div>
             </div>

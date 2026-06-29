@@ -326,6 +326,18 @@ button:disabled {
   margin: 0.25rem 0;
 }
 
+.player-settlements {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.player-settlement-list {
+  margin: 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.15rem;
+}
+
 .player-actions {
   display: flex;
   flex-wrap: wrap;
