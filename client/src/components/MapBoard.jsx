@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-function MapBoard({ players, territories, developments, currentPlayerId, onMove, onBattle, onPlaceShelter }) {
+function MapBoard({ players, territories, developments, currentPlayerId, currentPhase, onMove, onBattle, onPlaceShelter }) {
   const [error, setError] = useState('');
   const [selectedTerritoryIds, setSelectedTerritoryIds] = useState({});
   const [moveSelections, setMoveSelections] = useState({});
@@ -130,12 +130,18 @@ function MapBoard({ players, territories, developments, currentPlayerId, onMove,
   const activePlayerInPlacementPhase = Number(activePlayer?.shelters_to_place ?? 0) > 0;
 
   const canBattleInTerritory = (territory) => {
-    if (Number(territory.prey_remaining ?? 0) !== 0) {
+    if (currentPhase !== 'post_movement_check') {
       return false;
     }
 
     const territoryDevelopments = developmentsByTerritory[territory.id] || [];
     if (territoryDevelopments.length < 2) {
+      return false;
+    }
+
+    const totalShelters = territoryDevelopments.reduce((sum, development) => sum + Number(development.shelters ?? 0), 0);
+    const insufficientPrey = Number(territory.prey_remaining ?? 0) <= 0 || Number(territory.prey_remaining ?? 0) < totalShelters;
+    if (!insufficientPrey) {
       return false;
     }
 
@@ -191,7 +197,7 @@ function MapBoard({ players, territories, developments, currentPlayerId, onMove,
                 <button onClick={() => handleBattle(territory.id)}>Battaglia</button>
               </div>
             )}
-            {activePlayerInPlacementPhase && (
+            {currentPhase === 'setup_placement' && activePlayerInPlacementPhase && (
               <div className="territory-actions">
                 <button onClick={() => handlePlaceShelter(activePlayer.id, territory.id)}>Colloca riparo</button>
               </div>
@@ -210,7 +216,7 @@ function MapBoard({ players, territories, developments, currentPlayerId, onMove,
           const isActivePlayer = Number(player.id) === activePlayerId;
           const hasMovedThisTurn = Number(player.has_moved_this_turn) === 1;
           const isPlacementPhase = Number(player.shelters_to_place ?? 0) > 0;
-          const moveDisabled = !isActivePlayer || isPlacementPhase || hasMovedThisTurn || reachableTerritories.length === 0 || !selectedTerritoryIds[player.id];
+          const moveDisabled = currentPhase !== 'movement' || !isActivePlayer || isPlacementPhase || hasMovedThisTurn || reachableTerritories.length === 0 || !selectedTerritoryIds[player.id];
 
           return (
             <div key={player.id} className="move-control">
@@ -219,7 +225,7 @@ function MapBoard({ players, territories, developments, currentPlayerId, onMove,
               <select
                 value={selectedTerritoryIds[player.id] || ''}
                 onChange={(event) => setSelectedTerritoryIds((current) => ({ ...current, [player.id]: event.target.value }))}
-                disabled={!isActivePlayer || isPlacementPhase || hasMovedThisTurn || reachableTerritories.length === 0}
+                disabled={currentPhase !== 'movement' || !isActivePlayer || isPlacementPhase || hasMovedThisTurn || reachableTerritories.length === 0}
               >
                 <option value="">{reachableTerritories.length > 0 ? 'Seleziona territorio' : 'Nessun territorio adiacente'}</option>
                 {reachableTerritories.map((territory) => (
@@ -239,7 +245,7 @@ function MapBoard({ players, territories, developments, currentPlayerId, onMove,
                       villagesToMove: Number(current[player.id]?.villagesToMove ?? selection.villagesToMove ?? 0)
                     }
                   }))}
-                  disabled={!isActivePlayer || isPlacementPhase || hasMovedThisTurn || maxShelters === 0}
+                  disabled={currentPhase !== 'movement' || !isActivePlayer || isPlacementPhase || hasMovedThisTurn || maxShelters === 0}
                 >
                   {Array.from({ length: maxShelters + 1 }, (_, index) => (
                     <option key={`shelters-${player.id}-${index}`} value={index}>
@@ -259,7 +265,7 @@ function MapBoard({ players, territories, developments, currentPlayerId, onMove,
                       villagesToMove: Number(event.target.value)
                     }
                   }))}
-                  disabled={!isActivePlayer || isPlacementPhase || hasMovedThisTurn || maxVillages === 0}
+                  disabled={currentPhase !== 'movement' || !isActivePlayer || isPlacementPhase || hasMovedThisTurn || maxVillages === 0}
                 >
                   {Array.from({ length: maxVillages + 1 }, (_, index) => (
                     <option key={`villages-${player.id}-${index}`} value={index}>
@@ -270,6 +276,7 @@ function MapBoard({ players, territories, developments, currentPlayerId, onMove,
               </label>
               <button onClick={() => handleMove(player.id)} disabled={moveDisabled}>Sposta</button>
               {!isActivePlayer && <span className="turn-waiting">In attesa del turno</span>}
+              {isActivePlayer && currentPhase !== 'movement' && <span className="turn-waiting">Disponibile in Movimento</span>}
               {isActivePlayer && isPlacementPhase && <span className="turn-waiting">Colloca prima i ripari iniziali</span>}
               {isActivePlayer && hasMovedThisTurn && <span className="turn-waiting">Spostamento già effettuato</span>}
               {isActivePlayer && reachableTerritories.length === 0 && <span className="turn-waiting">Nessun territorio adiacente disponibile</span>}

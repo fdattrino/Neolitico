@@ -5,13 +5,27 @@ const { resetGameSession } = require('../gameSetup');
 const router = express.Router();
 
 const BUILD_SHELTER_COST = 5;
+const PLACE_SHELTER_COST = 2;
+const FORM_VILLAGE_COST = 8;
 const FOUND_CITY_COST = 40;
 const NOT_CURRENT_TURN_ERROR = 'Non è il turno di questo giocatore.';
 const MAINTENANCE_COSTS = {
-  shelters: 5,
-  villages: 10,
+  shelters: 2,
+  villages: 8,
   cities: 40
 };
+const SETUP_PHASE = 'setup_placement';
+const TURN_PHASES = [
+  'production',
+  'maintenance',
+  'event',
+  'population',
+  'movement',
+  'post_movement_check',
+  'beliefs',
+  'transformation',
+  'end_turn'
+];
 
 function serializeLogRow(row) {
   let details = row.details;
@@ -194,6 +208,40 @@ function calculateProduction(territory, development) {
   };
 }
 
+async function calculatePlayerProduction(playerId) {
+  const rows = await all(
+    `SELECT territory_development.id, territory_development.player_id, territory_development.territory_id,
+            territory_development.shelters, territory_development.villages, territory_development.cities,
+            territories.name AS territory_name,
+            territories.prey_remaining, territories.shelter_yield, territories.village_yield, territories.city_yield
+     FROM territory_development
+     INNER JOIN territories ON territories.id = territory_development.territory_id
+     WHERE territory_development.player_id = ?
+     ORDER BY territories.position_y, territories.position_x, territory_development.id`,
+    [playerId]
+  );
+
+  const territories = rows
+    .map((row) => {
+      const production = calculateProduction(row, row);
+      return {
+        territoryId: Number(row.territory_id),
+        territoryName: row.territory_name,
+        shelterYield: Number(row.shelter_yield ?? 0),
+        villageYield: Number(row.village_yield ?? 0),
+        cityYield: Number(row.city_yield ?? 0),
+        ...production
+      };
+    })
+    .filter((territory) => territory.totalProduction > 0);
+
+  return {
+    territories,
+    totalProduction: territories.reduce((sum, territory) => sum + territory.totalProduction, 0),
+    totalPreyConsumed: territories.reduce((sum, territory) => sum + territory.preyConsumed, 0)
+  };
+}
+
 async function requirePlacementPhaseComplete(player, res, actionLabel) {
   if (!isPlacementPhase(player)) {
     return true;
@@ -206,13 +254,85 @@ async function requirePlacementPhaseComplete(player, res, actionLabel) {
   return false;
 }
 
+function isKnownPhase(phase) {
+  return phase === SETUP_PHASE || TURN_PHASES.includes(phase);
+}
+
+function getNextPhase(currentPhase) {
+  const currentIndex = TURN_PHASES.indexOf(currentPhase);
+  if (currentIndex === -1) {
+    return null;
+  }
+
+  return TURN_PHASES[currentIndex + 1] ?? null;
+}
+
+async function detectStartingPhase() {
+  const row = await get('SELECT COUNT(*) AS pending FROM players WHERE shelters_to_place > 0');
+  return Number(row?.pending ?? 0) > 0 ? SETUP_PHASE : TURN_PHASES[0];
+}
+
+async function updateGamePhase(gameStateId, phase) {
+  await run('UPDATE game_state SET phase = ? WHERE id = ?', [phase, gameStateId]);
+}
+
+async function requireGamePhase(expectedPhases, res, actionLabel) {
+  const gameState = await ensureValidGameState();
+  const acceptedPhases = Array.isArray(expectedPhases) ? expectedPhases : [expectedPhases];
+
+  if (!gameState) {
+    res.status(400).json({ success: false, error: 'Lo stato della partita non è inizializzato.' });
+    return null;
+  }
+
+  if (!acceptedPhases.includes(gameState.phase)) {
+    res.status(400).json({
+      success: false,
+      error: `Azione non disponibile nella fase ${gameState.phase}. Fase richiesta per ${actionLabel}: ${acceptedPhases.join(' oppure ')}.`
+    });
+    return null;
+  }
+
+  return gameState;
+}
+
+function getBattleFieldForDevelopments(firstDevelopment, secondDevelopment) {
+  const bothHaveShelters = Number(firstDevelopment?.shelters ?? 0) > 0 && Number(secondDevelopment?.shelters ?? 0) > 0;
+  if (bothHaveShelters) {
+    return 'shelters';
+  }
+
+  const bothHaveVillages = Number(firstDevelopment?.villages ?? 0) > 0 && Number(secondDevelopment?.villages ?? 0) > 0;
+  if (bothHaveVillages) {
+    return 'villages';
+  }
+
+  return null;
+}
+
+function isBattleEligible(territory, territoryDevelopments) {
+  if (!territory || territoryDevelopments.length < 2) {
+    return false;
+  }
+
+  const totalShelters = territoryDevelopments.reduce((sum, development) => sum + Number(development.shelters ?? 0), 0);
+  const preyRemaining = Number(territory.prey_remaining ?? 0);
+  const insufficientPrey = preyRemaining <= 0 || preyRemaining < totalShelters;
+  if (!insufficientPrey) {
+    return false;
+  }
+
+  const [firstDevelopment, secondDevelopment] = territoryDevelopments;
+  return Boolean(getBattleFieldForDevelopments(firstDevelopment, secondDevelopment));
+}
+
 function rollDie() {
   return Math.floor(Math.random() * 6) + 1;
 }
 
 async function fetchGameState() {
   return get(
-    `SELECT game_state.id, game_state.round, game_state.current_player_id, players.name AS current_player_name
+    `SELECT game_state.id, game_state.round, game_state.phase, game_state.current_player_id, players.name AS current_player_name
      FROM game_state
      LEFT JOIN players ON players.id = game_state.current_player_id
      ORDER BY game_state.id
@@ -254,8 +374,9 @@ async function resetGameStateToAyla(round = 1) {
     return null;
   }
 
+  const phase = await detectStartingPhase();
   await run('DELETE FROM game_state');
-  await run('INSERT INTO game_state (current_player_id, round) VALUES (?, ?)', [ayla.id, round]);
+  await run('INSERT INTO game_state (current_player_id, round, phase) VALUES (?, ?, ?)', [ayla.id, round, phase]);
   return fetchGameState();
 }
 
@@ -274,10 +395,16 @@ async function ensureValidGameState() {
     return resetGameStateToAyla(Number(gameState.round) || 1);
   }
 
+  const phase = isKnownPhase(gameState.phase) ? gameState.phase : await detectStartingPhase();
+  if (phase !== gameState.phase) {
+    await updateGamePhase(gameState.id, phase);
+  }
+
   return {
     ...gameState,
     current_player_id: Number(gameState.current_player_id),
-    round: Number(gameState.round)
+    round: Number(gameState.round),
+    phase
   };
 }
 
@@ -383,56 +510,62 @@ async function loseOneDevelopmentForMaintenance(playerId) {
   return null;
 }
 
-async function applyRoundMaintenance(players) {
-  for (const player of players) {
-    const totals = await get(
-      `SELECT
-         COALESCE(SUM(shelters), 0) AS shelters,
-         COALESCE(SUM(villages), 0) AS villages,
-         COALESCE(SUM(cities), 0) AS cities
-       FROM territory_development
-       WHERE player_id = ?`,
-      [player.id]
-    );
-
-    const shelters = Number(totals?.shelters ?? 0);
-    const villages = Number(totals?.villages ?? 0);
-    const cities = Number(totals?.cities ?? 0);
-    const maintenanceCost = (shelters * MAINTENANCE_COSTS.shelters)
-      + (villages * MAINTENANCE_COSTS.villages)
-      + (cities * MAINTENANCE_COSTS.cities);
-
-    if (maintenanceCost <= 0) {
-      continue;
-    }
-
-    const currentPlayer = await get('SELECT id, name, resources FROM players WHERE id = ?', [player.id]);
-    if (!currentPlayer) {
-      continue;
-    }
-
-    if (Number(currentPlayer.resources) >= maintenanceCost) {
-      await run('UPDATE players SET resources = resources - ? WHERE id = ?', [maintenanceCost, player.id]);
-      await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
-        player.id,
-        `${currentPlayer.name} paga ${maintenanceCost} risorse di mantenimento.`,
-        JSON.stringify({ maintenanceCost, shelters, villages, cities, paid: true })
-      ]);
-      continue;
-    }
-
-    await run('UPDATE players SET resources = 0 WHERE id = ?', [player.id]);
-    const lostType = await loseOneDevelopmentForMaintenance(player.id);
-    const message = lostType
-      ? `${currentPlayer.name} non riesce a pagare tutto il mantenimento e perde 1 ${lostType}.`
-      : `${currentPlayer.name} non riesce a pagare tutto il mantenimento e resta senza risorse.`;
-
-    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
-      player.id,
-      message,
-      JSON.stringify({ maintenanceCost, shelters, villages, cities, paid: false, lostType })
-    ]);
+async function applyPlayerMaintenance(playerId) {
+  const player = await get('SELECT id, name, resources FROM players WHERE id = ?', [playerId]);
+  if (!player) {
+    return null;
   }
+
+  const totals = await get(
+    `SELECT
+       COALESCE(SUM(shelters), 0) AS shelters,
+       COALESCE(SUM(villages), 0) AS villages,
+       COALESCE(SUM(cities), 0) AS cities
+     FROM territory_development
+     WHERE player_id = ?`,
+    [playerId]
+  );
+
+  let shelters = Number(totals?.shelters ?? 0);
+  let villages = Number(totals?.villages ?? 0);
+  const cities = Number(totals?.cities ?? 0);
+  const losses = { shelters: 0, villages: 0 };
+
+  const computeMaintenanceCost = () => (
+    (shelters * MAINTENANCE_COSTS.shelters)
+      + (villages * MAINTENANCE_COSTS.villages)
+      + (cities * MAINTENANCE_COSTS.cities)
+  );
+
+  let maintenanceCost = computeMaintenanceCost();
+  let availableResources = Number(player.resources ?? 0);
+
+  while (maintenanceCost > availableResources && shelters > 0) {
+    await loseDevelopments(playerId, 'shelters', 1);
+    shelters -= 1;
+    losses.shelters += 1;
+    maintenanceCost = computeMaintenanceCost();
+  }
+
+  while (maintenanceCost > availableResources && villages > 0) {
+    await loseDevelopments(playerId, 'villages', 1);
+    villages -= 1;
+    losses.villages += 1;
+    maintenanceCost = computeMaintenanceCost();
+  }
+
+  const paidAmount = Math.min(availableResources, maintenanceCost);
+  await run('UPDATE players SET resources = resources - ? WHERE id = ?', [paidAmount, playerId]);
+
+  return {
+    playerName: player.name,
+    maintenanceCost,
+    paidAmount,
+    resourcesBefore: availableResources,
+    resourcesAfter: availableResources - paidAmount,
+    losses,
+    remaining: { shelters, villages, cities }
+  };
 }
 
 async function handleBuildShelter(req, res) {
@@ -445,6 +578,11 @@ async function handleBuildShelter(req, res) {
 
     const gameState = await requireCurrentPlayer(playerId, res);
     if (!gameState) {
+      return;
+    }
+
+    const phaseState = await requireGamePhase('transformation', res, 'costruzione riparo');
+    if (!phaseState) {
       return;
     }
 
@@ -502,6 +640,11 @@ async function handlePlaceShelter(req, res) {
       return;
     }
 
+    const phaseState = await requireGamePhase(SETUP_PHASE, res, 'collocazione riparo');
+    if (!phaseState) {
+      return;
+    }
+
     const player = await get('SELECT * FROM players WHERE id = ?', [playerId]);
     if (!player) {
       return res.status(404).json({ success: false, error: 'Player not found.' });
@@ -511,6 +654,10 @@ async function handlePlaceShelter(req, res) {
       return res.status(400).json({ success: false, error: 'Non ci sono più ripari iniziali da collocare.' });
     }
 
+    if (Number(player.resources) < PLACE_SHELTER_COST) {
+      return res.status(400).json({ success: false, error: 'Risorse insufficienti per collocare un riparo.' });
+    }
+
     const territory = await get('SELECT * FROM territories WHERE id = ?', [territoryId]);
     if (!territory) {
       return res.status(404).json({ success: false, error: 'Territory not found.' });
@@ -518,17 +665,18 @@ async function handlePlaceShelter(req, res) {
 
     const development = await ensureDevelopmentRecord(playerId, territoryId);
 
+    await run('UPDATE players SET resources = resources - ?, shelters_to_place = shelters_to_place - 1 WHERE id = ?', [PLACE_SHELTER_COST, playerId]);
     await run('UPDATE territory_development SET shelters = shelters + 1 WHERE id = ?', [development.id]);
-    await run('UPDATE players SET shelters_to_place = shelters_to_place - 1 WHERE id = ?', [playerId]);
 
     const updatedPlayer = await get('SELECT * FROM players WHERE id = ?', [playerId]);
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
       playerId,
-      `${player.name} colloca un riparo nella ${territory.name}. Ripari ancora da collocare: ${getEffectiveSheltersToPlace(updatedPlayer)}.`,
+      `${player.name} colloca un riparo nella ${territory.name}: -${PLACE_SHELTER_COST} risorse. Ripari ancora da collocare: ${getEffectiveSheltersToPlace(updatedPlayer)}.`,
       JSON.stringify({
         territoryId: territory.id,
         territoryName: territory.name,
         sheltersPlaced: 1,
+        resourceCost: PLACE_SHELTER_COST,
         sheltersToPlaceRemaining: getEffectiveSheltersToPlace(updatedPlayer)
       })
     ]);
@@ -612,7 +760,11 @@ router.post('/territories/:id/battle', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Valid territory id is required.' });
     }
 
-    const gameState = await ensureValidGameState();
+    const gameState = await requireGamePhase('post_movement_check', res, 'battaglia');
+    if (!gameState) {
+      return;
+    }
+
     const currentPlayer = gameState?.current_player_id
       ? await get('SELECT * FROM players WHERE id = ?', [gameState.current_player_id])
       : null;
@@ -626,15 +778,11 @@ router.post('/territories/:id/battle', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Territory not found.' });
     }
 
-    if (Number(territory.prey_remaining ?? 0) > 0) {
-      return res.status(400).json({ success: false, error: 'Ci sono ancora prede: la battaglia non è necessaria.' });
-    }
-
     const territoryDevelopments = (await fetchDevelopments()).filter(
       (development) => Number(development.territory_id) === territoryId
     );
 
-    if (territoryDevelopments.length < 2) {
+    if (!isBattleEligible(territory, territoryDevelopments)) {
       return res.status(400).json({ success: false, error: 'Non ci sono insediamenti confrontabili per la battaglia.' });
     }
 
@@ -651,12 +799,8 @@ router.post('/territories/:id/battle', async (req, res) => {
     const firstPlayer = players.find((player) => Number(player.id) === Number(firstDevelopment.player_id));
     const secondPlayer = players.find((player) => Number(player.id) === Number(secondDevelopment.player_id));
 
-    let battleField = null;
-    if (Number(firstDevelopment.shelters) > 0 && Number(secondDevelopment.shelters) > 0) {
-      battleField = 'shelters';
-    } else if (Number(firstDevelopment.villages) > 0 && Number(secondDevelopment.villages) > 0) {
-      battleField = 'villages';
-    } else {
+    const battleField = getBattleFieldForDevelopments(firstDevelopment, secondDevelopment);
+    if (!battleField) {
       return res.status(400).json({ success: false, error: 'Non ci sono insediamenti confrontabili per la battaglia.' });
     }
 
@@ -724,6 +868,11 @@ router.post('/players/:id/buy-belief', async (req, res) => {
 
     const gameState = await requireCurrentPlayer(playerId, res);
     if (!gameState) {
+      return;
+    }
+
+    const phaseState = await requireGamePhase('beliefs', res, 'acquisto credenza');
+    if (!phaseState) {
       return;
     }
 
@@ -805,6 +954,11 @@ router.post('/players/:id/move', async (req, res) => {
 
     const gameState = await requireCurrentPlayer(playerId, res);
     if (!gameState) {
+      return;
+    }
+
+    const phaseState = await requireGamePhase('movement', res, 'spostamento');
+    if (!phaseState) {
       return;
     }
 
@@ -916,6 +1070,11 @@ router.post('/players/:id/gather', async (req, res) => {
       return;
     }
 
+    const phaseState = await requireGamePhase('production', res, 'produzione');
+    if (!phaseState) {
+      return;
+    }
+
     const player = await get('SELECT * FROM players WHERE id = ?', [playerId]);
     if (!player) {
       return res.status(404).json({ success: false, error: 'Player not found.' });
@@ -929,65 +1088,56 @@ router.post('/players/:id/gather', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Hai già raccolto risorse in questo turno.' });
     }
 
-    if (!player.current_territory_id) {
-      return res.status(400).json({ success: false, error: 'Player is not currently in a territory.' });
-    }
-
-    const territory = await get('SELECT * FROM territories WHERE id = ?', [player.current_territory_id]);
-    if (!territory) {
-      return res.status(404).json({ success: false, error: 'Current territory not found.' });
-    }
-
-    const development = await fetchPlayerDevelopmentInTerritory(playerId, territory.id);
-    const production = calculateProduction(territory, development);
+    const production = await calculatePlayerProduction(playerId);
 
     if (production.totalProduction <= 0) {
-      return res.status(400).json({ success: false, error: 'Non ci sono strutture produttive attive in questo territorio.' });
+      return res.status(400).json({ success: false, error: 'Non ci sono strutture produttive attive nei territori del giocatore.' });
     }
 
     await run(
       'UPDATE players SET resources = resources + ?, has_gathered_this_turn = 1 WHERE id = ?',
       [production.totalProduction, playerId]
     );
-    if (production.preyConsumed > 0) {
+
+    for (const territory of production.territories) {
+      if (territory.preyConsumed <= 0) {
+        continue;
+      }
+
       await run(
         'UPDATE territories SET prey_remaining = CASE WHEN prey_remaining >= ? THEN prey_remaining - ? ELSE 0 END WHERE id = ?',
-        [production.preyConsumed, production.preyConsumed, territory.id]
+        [territory.preyConsumed, territory.preyConsumed, territory.territoryId]
       );
     }
 
-    const logParts = [];
-    if (production.shelterProduction > 0) {
-      logParts.push(`ripari +${production.shelterProduction}`);
-    }
-    if (production.villageProduction > 0) {
-      logParts.push(`villaggi +${production.villageProduction}`);
-    }
-    if (production.cityProduction > 0) {
-      logParts.push(`città +${production.cityProduction}`);
-    }
-    if (production.preyConsumed > 0) {
-      logParts.push(`prede consumate ${production.preyConsumed}`);
-    }
-    if (production.inactiveShelters > 0) {
-      logParts.push(`ripari senza prede ${production.inactiveShelters}`);
-    }
+    const territoryParts = production.territories.map((territory) => {
+      const shelterPart = territory.shelterProduction > 0
+        ? `${territory.preyConsumed} ${territory.preyConsumed === 1 ? 'riparo produttivo' : 'ripari produttivi'} x ${territory.shelterYield} = ${territory.shelterProduction} risorse`
+        : 'nessun riparo produttivo';
+      const otherParts = [];
+      if (territory.villageProduction > 0) {
+        otherParts.push(`villaggi +${territory.villageProduction}`);
+      }
+      if (territory.cityProduction > 0) {
+        otherParts.push(`città +${territory.cityProduction}`);
+      }
+      const suffix = otherParts.length > 0 ? `, ${otherParts.join(', ')}` : '';
+      const preyAfter = Math.max(0, Number(territory.preyConsumed ?? 0) ? 0 : Number(territory.preyConsumed ?? 0));
+      return `${territory.territoryName}: ${shelterPart}${suffix}. Prede consumate: ${territory.preyConsumed}.`;
+    });
 
-    const logMessage = `${player.name} produce nella ${territory.name}: ${logParts.join(', ')}, totale +${production.totalProduction}.`;
+    const logMessage = `${player.name} produce nei territori: ${territoryParts.join(' ')} Totale +${production.totalProduction} risorse.`;
 
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
       playerId,
       logMessage,
       JSON.stringify({
-        territoryId: territory.id,
-        territoryName: territory.name,
-        developmentId: development?.id ?? null,
-        shelterYield: Number(territory.shelter_yield ?? 0),
-        villageYield: Number(territory.village_yield ?? 0),
-        cityYield: Number(territory.city_yield ?? 0),
+        territories: production.territories,
         ...production
       })
     ]);
+
+    await updateGamePhase(gameState.id, 'maintenance');
 
     res.json({
       success: true,
@@ -1004,6 +1154,51 @@ router.post('/players/:id/gather', async (req, res) => {
 router.post('/players/:id/build-shelter', handleBuildShelter);
 router.post('/players/:id/place-shelter', handlePlaceShelter);
 
+router.post('/players/:id/maintenance', async (req, res) => {
+  try {
+    const playerId = Number(req.params.id);
+
+    if (Number.isNaN(playerId)) {
+      return res.status(400).json({ success: false, error: 'Valid player id is required.' });
+    }
+
+    const gameState = await requireCurrentPlayer(playerId, res);
+    if (!gameState) {
+      return;
+    }
+
+    const phaseState = await requireGamePhase('maintenance', res, 'mantenimento');
+    if (!phaseState) {
+      return;
+    }
+
+    const result = await applyPlayerMaintenance(playerId);
+    if (!result) {
+      return res.status(404).json({ success: false, error: 'Player not found.' });
+    }
+
+    const lossParts = [];
+    if (result.losses.shelters > 0) {
+      lossParts.push(`${result.losses.shelters} ${result.losses.shelters === 1 ? 'riparo perso' : 'ripari persi'}`);
+    }
+    if (result.losses.villages > 0) {
+      lossParts.push(`${result.losses.villages} ${result.losses.villages === 1 ? 'villaggio perso' : 'villaggi persi'}`);
+    }
+    const lossText = lossParts.length > 0 ? ` Perdite: ${lossParts.join(', ')}.` : '';
+
+    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+      playerId,
+      `${result.playerName} paga il mantenimento: -${result.paidAmount} risorse.${lossText}`,
+      JSON.stringify(result)
+    ]);
+
+    await updateGamePhase(gameState.id, 'event');
+    res.json({ success: true, data: await buildSharedPayload(playerId) });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 router.post('/players/:id/upgrade-to-village', async (req, res) => {
   try {
     const playerId = Number(req.params.id);
@@ -1014,6 +1209,11 @@ router.post('/players/:id/upgrade-to-village', async (req, res) => {
 
     const gameState = await requireCurrentPlayer(playerId, res);
     if (!gameState) {
+      return;
+    }
+
+    const phaseState = await requireGamePhase('transformation', res, 'formazione villaggio');
+    if (!phaseState) {
       return;
     }
 
@@ -1040,11 +1240,16 @@ router.post('/players/:id/upgrade-to-village', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Servono 3 ripari per formare un villaggio.' });
     }
 
+    if (Number(player.resources) < FORM_VILLAGE_COST) {
+      return res.status(400).json({ success: false, error: 'Servono 8 risorse per formare un villaggio.' });
+    }
+
+    await run('UPDATE players SET resources = resources - ? WHERE id = ?', [FORM_VILLAGE_COST, playerId]);
     await run('UPDATE territory_development SET shelters = shelters - 3, villages = villages + 1 WHERE id = ?', [development.id]);
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
       playerId,
-      `${player.name} trasforma 3 ripari in 1 villaggio nella ${territory.name}.`,
-      JSON.stringify({ territoryId: territory.id, territoryName: territory.name, sheltersSpent: 3, villagesGained: 1 })
+      `${player.name} trasforma 3 ripari in 1 villaggio nella ${territory.name}: -${FORM_VILLAGE_COST} risorse.`,
+      JSON.stringify({ territoryId: territory.id, territoryName: territory.name, sheltersSpent: 3, villagesGained: 1, resourceCost: FORM_VILLAGE_COST })
     ]);
 
     res.json({ success: true, data: await buildSharedPayload(playerId) });
@@ -1063,6 +1268,11 @@ router.post('/players/:id/upgrade-to-city', async (req, res) => {
 
     const gameState = await requireCurrentPlayer(playerId, res);
     if (!gameState) {
+      return;
+    }
+
+    const phaseState = await requireGamePhase('transformation', res, 'fondazione città');
+    if (!phaseState) {
       return;
     }
 
@@ -1097,7 +1307,7 @@ router.post('/players/:id/upgrade-to-city', async (req, res) => {
     await run('UPDATE territory_development SET villages = villages - 3, cities = cities + 1 WHERE id = ?', [development.id]);
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
       playerId,
-      `${player.name} fonda una città nella ${territory.name} consumando 3 villaggi e 40 risorse.`,
+      `${player.name} fonda una città nella ${territory.name} consumando 3 villaggi: -${FOUND_CITY_COST} risorse.`,
       JSON.stringify({ territoryId: territory.id, territoryName: territory.name, villagesSpent: 3, citiesGained: 1, resourceCost: FOUND_CITY_COST })
     ]);
 
@@ -1133,6 +1343,11 @@ router.post('/players/:id/draw-event', async (req, res) => {
 
     const gameState = await requireCurrentPlayer(playerId, res);
     if (!gameState) {
+      return;
+    }
+
+    const phaseState = await requireGamePhase('event', res, 'pesca evento');
+    if (!phaseState) {
       return;
     }
 
@@ -1204,6 +1419,8 @@ router.post('/players/:id/draw-event', async (req, res) => {
       JSON.stringify({ eventCardId: eventCard.id, effectType: eventCard.effect_type, effectValue: eventCard.effect_value })
     ]);
 
+    await updateGamePhase(gameState.id, 'population');
+
     res.json({
       success: true,
       data: {
@@ -1211,6 +1428,100 @@ router.post('/players/:id/draw-event', async (req, res) => {
         event: eventCard
       }
     });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/players/:id/population', async (req, res) => {
+  try {
+    const playerId = Number(req.params.id);
+
+    if (Number.isNaN(playerId)) {
+      return res.status(400).json({ success: false, error: 'Valid player id is required.' });
+    }
+
+    const gameState = await requireCurrentPlayer(playerId, res);
+    if (!gameState) {
+      return;
+    }
+
+    const phaseState = await requireGamePhase('population', res, 'crescita popolazione');
+    if (!phaseState) {
+      return;
+    }
+
+    const player = await get('SELECT id, name FROM players WHERE id = ?', [playerId]);
+    if (!player) {
+      return res.status(404).json({ success: false, error: 'Player not found.' });
+    }
+
+    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+      playerId,
+      `${player.name} gestisce la crescita della popolazione.`,
+      JSON.stringify({ phase: 'population', playerId })
+    ]);
+
+    await updateGamePhase(gameState.id, 'movement');
+    res.json({ success: true, data: await buildSharedPayload(playerId) });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/turn/post-movement-check', async (_req, res) => {
+  try {
+    const gameState = await requireGamePhase('post_movement_check', res, 'verifica post movimento');
+    if (!gameState) {
+      return;
+    }
+
+    const territories = await fetchTerritoriesWithDevelopments();
+    const contested = territories
+      .filter((territory) => isBattleEligible(territory, territory.developments || []))
+      .map((territory) => ({
+        territoryId: territory.id,
+        territoryName: territory.name
+      }));
+
+    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+      gameState.current_player_id,
+      contested.length > 0
+        ? `Verifica post movimento: possibili battaglie in ${contested.map((item) => item.territoryName).join(', ')}.`
+        : 'Verifica post movimento: nessuna battaglia disponibile.',
+      JSON.stringify({ contested })
+    ]);
+
+    res.json({ success: true, data: { contested, ...(await buildSharedPayload(gameState.current_player_id)) } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/turn/advance-phase', async (_req, res) => {
+  try {
+    const gameState = await ensureValidGameState();
+    if (!gameState || !gameState.current_player_id) {
+      return res.status(400).json({ success: false, error: 'Lo stato della partita non è inizializzato.' });
+    }
+
+    if (gameState.phase === SETUP_PHASE || gameState.phase === 'end_turn') {
+      return res.status(400).json({ success: false, error: 'Questa fase usa la chiusura turno invece dell\'avanzamento fase.' });
+    }
+
+    const nextPhase = getNextPhase(gameState.phase);
+    if (!nextPhase) {
+      return res.status(400).json({ success: false, error: 'Non esiste una fase successiva.' });
+    }
+
+    await updateGamePhase(gameState.id, nextPhase);
+    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+      gameState.current_player_id,
+      `La partita passa alla fase ${nextPhase}.`,
+      JSON.stringify({ fromPhase: gameState.phase, toPhase: nextPhase })
+    ]);
+
+    res.json({ success: true, data: await ensureValidGameState() });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -1244,23 +1555,34 @@ router.post('/turn/end', async (_req, res) => {
 
     const isLastPlayer = currentIndex === players.length - 1;
     const nextPlayer = isLastPlayer ? players[0] : players[currentIndex + 1];
-    const nextRound = isLastPlayer ? gameState.round + 1 : gameState.round;
+    const hasPendingPlacement = await get('SELECT COUNT(*) AS pending FROM players WHERE shelters_to_place > 0');
 
-    if (isLastPlayer) {
-      await applyRoundMaintenance(players);
+    let nextRound = gameState.round;
+    let nextPhase = gameState.phase;
+    let message = '';
+
+    if (gameState.phase === SETUP_PHASE) {
+      nextPhase = Number(hasPendingPlacement?.pending ?? 0) > 0 ? SETUP_PHASE : 'production';
+      await run('UPDATE game_state SET current_player_id = ?, round = ?, phase = ? WHERE id = ?', [nextPlayer.id, nextRound, nextPhase, gameState.id]);
+      message = nextPhase === SETUP_PHASE
+        ? `Fine turno di collocazione di ${gameState.current_player_name}. Ora tocca a ${nextPlayer.name}.`
+        : `Collocazione iniziale completata. Inizia la fase production del round ${nextRound} con ${nextPlayer.name}.`;
+    } else if (gameState.phase === 'end_turn') {
+      nextRound = isLastPlayer ? gameState.round + 1 : gameState.round;
+      nextPhase = 'production';
+      await run('UPDATE players SET has_moved_this_turn = 0, has_gathered_this_turn = 0');
+      await run('UPDATE game_state SET current_player_id = ?, round = ?, phase = ? WHERE id = ?', [nextPlayer.id, nextRound, nextPhase, gameState.id]);
+      message = isLastPlayer
+        ? `Fine round ${gameState.round}. Ora inizia il round ${nextRound}. Tocca ad ${nextPlayer.name}.`
+        : `Fine turno di ${gameState.current_player_name}. Ora tocca a ${nextPlayer.name} nella fase production.`;
+    } else {
+      return res.status(400).json({ success: false, error: 'Puoi chiudere il turno solo durante setup_placement o end_turn.' });
     }
-
-    await run('UPDATE players SET has_moved_this_turn = 0, has_gathered_this_turn = 0');
-    await run('UPDATE game_state SET current_player_id = ?, round = ? WHERE id = ?', [nextPlayer.id, nextRound, gameState.id]);
-
-    const message = isLastPlayer
-      ? `Fine round ${gameState.round}. Ora inizia il round ${nextRound}. Tocca ad ${nextPlayer.name}.`
-      : `Fine turno di ${gameState.current_player_name}. Ora tocca a ${nextPlayer.name}.`;
 
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
       gameState.current_player_id,
       message,
-      JSON.stringify({ fromPlayerId: gameState.current_player_id, toPlayerId: nextPlayer.id, round: nextRound })
+      JSON.stringify({ fromPlayerId: gameState.current_player_id, toPlayerId: nextPlayer.id, round: nextRound, phase: nextPhase })
     ]);
 
     const updatedGameState = await ensureValidGameState();

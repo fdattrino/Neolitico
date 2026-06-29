@@ -1,4 +1,4 @@
-function BeliefCards({ beliefs, players, currentPlayerId, onBuy }) {
+function BeliefCards({ beliefs, players, currentPlayerId, currentPhase, onBuy }) {
   const isAlreadyOwned = (player, beliefId) => (player.owned_belief_ids || []).includes(beliefId);
   const activePlayerId = Number(currentPlayerId);
   const beliefById = beliefs.reduce((acc, belief) => {
@@ -29,7 +29,7 @@ function BeliefCards({ beliefs, players, currentPlayerId, onBuy }) {
                 const alreadyOwned = isAlreadyOwned(player, belief.id);
                 const insufficientResources = player.resources < belief.cost;
                 const isActivePlayer = Number(player.id) === activePlayerId;
-                const disabled = alreadyOwned || insufficientResources || !isActivePlayer;
+                const disabled = currentPhase !== 'beliefs' || alreadyOwned || insufficientResources || !isActivePlayer;
                 const sameTypeBefore = getSameTypeCount(player, belief.type_code);
                 const multiplier = sameTypeBefore + 1;
                 const totalGain = Number(belief.resource_gain || 0) * multiplier;
@@ -43,7 +43,7 @@ function BeliefCards({ beliefs, players, currentPlayerId, onBuy }) {
                     onClick={() => onBuy(player.id, belief.id)}
                     disabled={disabled}
                   >
-                    {alreadyOwned ? 'Gia posseduta' : insufficientResources ? 'Risorse insufficienti' : !isActivePlayer ? `In attesa del turno: ${player.name}` : buyLabel}
+                    {currentPhase !== 'beliefs' ? 'Disponibile in Credenze' : alreadyOwned ? 'Gia posseduta' : insufficientResources ? 'Risorse insufficienti' : !isActivePlayer ? `In attesa del turno: ${player.name}` : buyLabel}
                   </button>
                 );
               })}

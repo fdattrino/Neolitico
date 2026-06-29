@@ -11,13 +11,13 @@ const territories = [
 ];
 
 const players = [
-  { name: 'Ayla', tribe: 'Cacciatrice', resources: 10, starting_territory: 'Foresta' },
-  { name: 'Bram', tribe: 'Costruttore', resources: 10, starting_territory: 'Pianura' }
+  { name: 'Ayla', tribe: 'Cacciatrice', resources: 20, starting_territory: 'Foresta' },
+  { name: 'Bram', tribe: 'Costruttore', resources: 20, starting_territory: 'Pianura' }
 ];
 
 const resetPlayers = [
-  { name: 'Ayla', tribe: 'Cacciatrice', resources: 10, starting_territory: 'Foresta' },
-  { name: 'Bram', tribe: 'Costruttore', resources: 10, starting_territory: 'Pianura' }
+  { name: 'Ayla', tribe: 'Cacciatrice', resources: 20, starting_territory: 'Foresta' },
+  { name: 'Bram', tribe: 'Costruttore', resources: 20, starting_territory: 'Pianura' }
 ];
 
 const beliefCards = [

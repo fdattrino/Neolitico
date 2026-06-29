@@ -187,6 +187,42 @@ function ensureTerritoryDevelopmentConstraints() {
   });
 }
 
+function ensureGameStateColumns() {
+  return new Promise((resolve, reject) => {
+    db.all('PRAGMA table_info(game_state)', (err, columns) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+
+      const columnNames = new Set(columns.map((column) => column.name));
+      const statements = [];
+
+      if (!columnNames.has('phase')) {
+        statements.push("ALTER TABLE game_state ADD COLUMN phase TEXT NOT NULL DEFAULT 'setup_placement'");
+      }
+
+      const runNext = () => {
+        if (statements.length === 0) {
+          resolve();
+          return;
+        }
+
+        const statement = statements.shift();
+        db.run(statement, (alterErr) => {
+          if (alterErr) {
+            reject(alterErr);
+            return;
+          }
+          runNext();
+        });
+      };
+
+      runNext();
+    });
+  });
+}
+
 function initDb() {
   return new Promise((resolve, reject) => {
     const schema = `
@@ -281,6 +317,7 @@ function initDb() {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         current_player_id INTEGER,
         round INTEGER NOT NULL DEFAULT 1,
+        phase TEXT NOT NULL DEFAULT 'setup_placement',
         FOREIGN KEY(current_player_id) REFERENCES players(id)
       );
 
@@ -304,7 +341,8 @@ function initDb() {
         ensurePlayerColumns(),
         ensureTerritoryColumns(),
         ensureSettlementConstraints(),
-        ensureTerritoryDevelopmentConstraints()
+        ensureTerritoryDevelopmentConstraints(),
+        ensureGameStateColumns()
       ])
         .then(() => run(
           `UPDATE belief_cards
