@@ -86,7 +86,7 @@ async function resetAndSeedGame(round = 1, options = {}) {
 
   await insertBeliefCards();
   await insertEventCards();
-  await run('INSERT INTO game_state (current_player_id, round, phase) VALUES (?, ?, ?)', [ayla?.id ?? null, round, 'setup_placement']);
+  await run('INSERT INTO game_state (current_player_id, round, phase, current_phase) VALUES (?, ?, ?, ?)', [ayla?.id ?? null, round, 'setup_placement', 'setup_placement']);
 
   return {
     territoryIdsByName,

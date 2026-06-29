@@ -201,6 +201,9 @@ function ensureGameStateColumns() {
       if (!columnNames.has('phase')) {
         statements.push("ALTER TABLE game_state ADD COLUMN phase TEXT NOT NULL DEFAULT 'setup_placement'");
       }
+      if (!columnNames.has('current_phase')) {
+        statements.push("ALTER TABLE game_state ADD COLUMN current_phase TEXT NOT NULL DEFAULT 'setup_placement'");
+      }
 
       const runNext = () => {
         if (statements.length === 0) {
@@ -318,6 +321,7 @@ function initDb() {
         current_player_id INTEGER,
         round INTEGER NOT NULL DEFAULT 1,
         phase TEXT NOT NULL DEFAULT 'setup_placement',
+        current_phase TEXT NOT NULL DEFAULT 'setup_placement',
         FOREIGN KEY(current_player_id) REFERENCES players(id)
       );
 
@@ -344,6 +348,10 @@ function initDb() {
         ensureTerritoryDevelopmentConstraints(),
         ensureGameStateColumns()
       ])
+        .then(() => run(
+          `UPDATE game_state
+           SET current_phase = COALESCE(phase, current_phase, 'setup_placement')`
+        ))
         .then(() => run(
           `UPDATE belief_cards
            SET resource_gain = CASE

@@ -16,19 +16,6 @@ function MapBoard({ players, territories, developments, currentPlayerId, current
     return acc;
   }, {});
 
-  const playersByTerritory = territories.reduce((acc, territory) => {
-    acc[territory.id] = [];
-    return acc;
-  }, {});
-
-  players.forEach((player) => {
-    if (player.current_territory_id) {
-      const territoryId = normalizeId(player.current_territory_id);
-      playersByTerritory[territoryId] = playersByTerritory[territoryId] || [];
-      playersByTerritory[territoryId].push(player.name);
-    }
-  });
-
   const getReachableTerritories = (player) => {
     const currentTerritory = territories.find((territory) => normalizeId(territory.id) === normalizeId(player.current_territory_id));
     if (!currentTerritory) {
@@ -157,53 +144,48 @@ function MapBoard({ players, territories, developments, currentPlayerId, current
       <h2>Mappa dei territori</h2>
       {error && <p className="alert">{error}</p>}
 
-      <div className="map-grid">
-        {territories.map((territory) => (
-          <div key={territory.id} className="territory-cell">
-            <div className="territory-head">
-              <h3>{territory.name}</h3>
-              <span className="territory-type">{territory.terrain_type}</span>
-            </div>
-            <p className="territory-description">{territory.description}</p>
-            <p className="territory-prey">Prede: {territory.prey_remaining} / {territory.prey_capacity}</p>
-            <div className="territory-yields">
-              <span>Riparo: +{territory.shelter_yield}</span>
-              <span>Villaggio: +{territory.village_yield}</span>
-              <span>Città: +{territory.city_yield}</span>
-            </div>
-            <div className="territory-players">
-              {(playersByTerritory[territory.id] || []).length > 0 ? (
-                playersByTerritory[territory.id].map((playerName) => (
-                  <span key={`${territory.id}-${playerName}`} className="player-chip">{playerName}</span>
-                ))
-              ) : (
-                <span className="hint">Nessun giocatore</span>
+      <div className="map-wrapper">
+        <div className="map-grid">
+          {territories.map((territory) => (
+            <div key={territory.id} className="territory-cell territory-card">
+              <div className="territory-head">
+                <h3>{territory.name}</h3>
+                <span className="territory-type">{territory.terrain_type}</span>
+              </div>
+              <p className="territory-description">{territory.description}</p>
+              <p className="territory-prey">Prede: {territory.prey_remaining} / {territory.prey_capacity}</p>
+              <div className="territory-yields">
+                <span>Riparo: +{territory.shelter_yield}</span>
+                <span>Villaggio: +{territory.village_yield}</span>
+                <span>Città: +{territory.city_yield}</span>
+              </div>
+              
+              <div className="development-list">
+                {(developmentsByTerritory[territory.id] || []).length > 0 ? (
+                  developmentsByTerritory[territory.id].map((development) => (
+                    <div key={development.id} className="development-item">
+                      <span>
+                        {development.player_name}: {development.shelters} ripari, {development.villages} villaggi, {development.cities} città
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <p>Nessun insediamento</p>
+                )}
+              </div>
+              {canBattleInTerritory(territory) && (
+                <div className="territory-actions">
+                  <button onClick={() => handleBattle(territory.id)}>Battaglia</button>
+                </div>
+              )}
+              {currentPhase === 'setup_placement' && activePlayerInPlacementPhase && (
+                <div className="territory-actions">
+                  <button onClick={() => handlePlaceShelter(activePlayer.id, territory.id)}>Colloca riparo</button>
+                </div>
               )}
             </div>
-            <div className="development-list">
-              {(developmentsByTerritory[territory.id] || []).length > 0 ? (
-                developmentsByTerritory[territory.id].map((development) => (
-                  <div key={development.id} className="development-item">
-                    <strong>{development.player_name}</strong>
-                    <span>{development.shelters} ripari, {development.villages} villaggi, {development.cities} città</span>
-                  </div>
-                ))
-              ) : (
-                <span className="hint">Nessun insediamento</span>
-              )}
-            </div>
-            {canBattleInTerritory(territory) && (
-              <div className="territory-actions">
-                <button onClick={() => handleBattle(territory.id)}>Battaglia</button>
-              </div>
-            )}
-            {currentPhase === 'setup_placement' && activePlayerInPlacementPhase && (
-              <div className="territory-actions">
-                <button onClick={() => handlePlaceShelter(activePlayer.id, territory.id)}>Colloca riparo</button>
-              </div>
-            )}
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
 
       <div className="move-controls">

@@ -23,8 +23,7 @@ const TURN_PHASES = [
   'movement',
   'post_movement_check',
   'beliefs',
-  'transformation',
-  'end_turn'
+  'transformation'
 ];
 
 function serializeLogRow(row) {
@@ -186,8 +185,8 @@ function calculateProduction(territory, development) {
   const shelters = Number(development?.shelters ?? 0);
   const villages = Number(development?.villages ?? 0);
   const cities = Number(development?.cities ?? 0);
-  const preyRemaining = Number(territory?.prey_remaining ?? 0);
-  const activeShelters = Math.min(shelters, preyRemaining);
+  const preyBefore = Number(territory?.prey_remaining ?? 0);
+  const activeShelters = Math.min(shelters, preyBefore);
   const shelterYield = Number(territory?.shelter_yield ?? 0);
   const villageYield = Number(territory?.village_yield ?? 0);
   const cityYield = Number(territory?.city_yield ?? 0);
@@ -199,7 +198,9 @@ function calculateProduction(territory, development) {
     shelters,
     villages,
     cities,
+    preyBefore,
     preyConsumed: activeShelters,
+    preyAfter: Math.max(0, preyBefore - activeShelters),
     inactiveShelters: shelters - activeShelters,
     shelterProduction,
     villageProduction,
@@ -273,7 +274,14 @@ async function detectStartingPhase() {
 }
 
 async function updateGamePhase(gameStateId, phase) {
-  await run('UPDATE game_state SET phase = ? WHERE id = ?', [phase, gameStateId]);
+  await run('UPDATE game_state SET phase = ?, current_phase = ? WHERE id = ?', [phase, phase, gameStateId]);
+}
+
+async function updateGameTurnState(gameStateId, currentPlayerId, round, phase) {
+  await run(
+    'UPDATE game_state SET current_player_id = ?, round = ?, phase = ?, current_phase = ? WHERE id = ?',
+    [currentPlayerId, round, phase, phase, gameStateId]
+  );
 }
 
 async function requireGamePhase(expectedPhases, res, actionLabel) {
@@ -285,10 +293,10 @@ async function requireGamePhase(expectedPhases, res, actionLabel) {
     return null;
   }
 
-  if (!acceptedPhases.includes(gameState.phase)) {
+  if (!acceptedPhases.includes(gameState.current_phase)) {
     res.status(400).json({
       success: false,
-      error: `Azione non disponibile nella fase ${gameState.phase}. Fase richiesta per ${actionLabel}: ${acceptedPhases.join(' oppure ')}.`
+      error: `Azione non disponibile nella fase ${gameState.current_phase}. Fase richiesta per ${actionLabel}: ${acceptedPhases.join(' oppure ')}.`
     });
     return null;
   }
@@ -332,7 +340,10 @@ function rollDie() {
 
 async function fetchGameState() {
   return get(
-    `SELECT game_state.id, game_state.round, game_state.phase, game_state.current_player_id, players.name AS current_player_name
+    `SELECT game_state.id, game_state.round,
+            COALESCE(game_state.current_phase, game_state.phase, 'setup_placement') AS current_phase,
+            COALESCE(game_state.current_phase, game_state.phase, 'setup_placement') AS phase,
+            game_state.current_player_id, players.name AS current_player_name
      FROM game_state
      LEFT JOIN players ON players.id = game_state.current_player_id
      ORDER BY game_state.id
@@ -376,7 +387,7 @@ async function resetGameStateToAyla(round = 1) {
 
   const phase = await detectStartingPhase();
   await run('DELETE FROM game_state');
-  await run('INSERT INTO game_state (current_player_id, round, phase) VALUES (?, ?, ?)', [ayla.id, round, phase]);
+  await run('INSERT INTO game_state (current_player_id, round, phase, current_phase) VALUES (?, ?, ?, ?)', [ayla.id, round, phase, phase]);
   return fetchGameState();
 }
 
@@ -395,16 +406,17 @@ async function ensureValidGameState() {
     return resetGameStateToAyla(Number(gameState.round) || 1);
   }
 
-  const phase = isKnownPhase(gameState.phase) ? gameState.phase : await detectStartingPhase();
-  if (phase !== gameState.phase) {
-    await updateGamePhase(gameState.id, phase);
+  const currentPhase = isKnownPhase(gameState.current_phase) ? gameState.current_phase : await detectStartingPhase();
+  if (currentPhase !== gameState.current_phase || currentPhase !== gameState.phase) {
+    await updateGamePhase(gameState.id, currentPhase);
   }
 
   return {
     ...gameState,
     current_player_id: Number(gameState.current_player_id),
     round: Number(gameState.round),
-    phase
+    current_phase: currentPhase,
+    phase: currentPhase
   };
 }
 
@@ -1122,8 +1134,7 @@ router.post('/players/:id/gather', async (req, res) => {
         otherParts.push(`città +${territory.cityProduction}`);
       }
       const suffix = otherParts.length > 0 ? `, ${otherParts.join(', ')}` : '';
-      const preyAfter = Math.max(0, Number(territory.preyConsumed ?? 0) ? 0 : Number(territory.preyConsumed ?? 0));
-      return `${territory.territoryName}: ${shelterPart}${suffix}. Prede consumate: ${territory.preyConsumed}.`;
+      return `${territory.territoryName}: ${shelterPart}${suffix}. Prede consumate: ${territory.preyConsumed}. Prede rimaste: ${territory.preyAfter}.`;
     });
 
     const logMessage = `${player.name} produce nei territori: ${territoryParts.join(' ')} Totale +${production.totalProduction} risorse.`;
@@ -1136,8 +1147,6 @@ router.post('/players/:id/gather', async (req, res) => {
         ...production
       })
     ]);
-
-    await updateGamePhase(gameState.id, 'maintenance');
 
     res.json({
       success: true,
@@ -1192,7 +1201,6 @@ router.post('/players/:id/maintenance', async (req, res) => {
       JSON.stringify(result)
     ]);
 
-    await updateGamePhase(gameState.id, 'event');
     res.json({ success: true, data: await buildSharedPayload(playerId) });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -1419,8 +1427,6 @@ router.post('/players/:id/draw-event', async (req, res) => {
       JSON.stringify({ eventCardId: eventCard.id, effectType: eventCard.effect_type, effectValue: eventCard.effect_value })
     ]);
 
-    await updateGamePhase(gameState.id, 'population');
-
     res.json({
       success: true,
       data: {
@@ -1462,7 +1468,6 @@ router.post('/players/:id/population', async (req, res) => {
       JSON.stringify({ phase: 'population', playerId })
     ]);
 
-    await updateGamePhase(gameState.id, 'movement');
     res.json({ success: true, data: await buildSharedPayload(playerId) });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -1498,32 +1503,110 @@ router.post('/turn/post-movement-check', async (_req, res) => {
   }
 });
 
-router.post('/turn/advance-phase', async (_req, res) => {
-  try {
-    const gameState = await ensureValidGameState();
-    if (!gameState || !gameState.current_player_id) {
-      return res.status(400).json({ success: false, error: 'Lo stato della partita non è inizializzato.' });
+async function advanceToNextPlayerOrPhase() {
+  const gameState = await ensureValidGameState();
+  if (!gameState || !gameState.current_player_id) {
+    throw new Error('Lo stato della partita non è inizializzato.');
+  }
+
+  const players = await fetchPlayersForTurnOrder();
+  if (players.length === 0) {
+    throw new Error('No players found.');
+  }
+
+  const currentIndex = players.findIndex((player) => Number(player.id) === Number(gameState.current_player_id));
+  if (currentIndex === -1) {
+    throw new Error('Il giocatore corrente non esiste più.');
+  }
+
+  const isLastPlayer = currentIndex === players.length - 1;
+  const firstPlayer = players[0];
+  const nextPlayer = isLastPlayer ? firstPlayer : players[currentIndex + 1];
+  const currentPhase = gameState.current_phase;
+
+  if (currentPhase === SETUP_PHASE) {
+    const currentPlayer = await get('SELECT id, name, shelters_to_place FROM players WHERE id = ?', [gameState.current_player_id]);
+    if (!currentPlayer) {
+      throw new Error('Il giocatore corrente non esiste più.');
     }
 
-    if (gameState.phase === SETUP_PHASE || gameState.phase === 'end_turn') {
-      return res.status(400).json({ success: false, error: 'Questa fase usa la chiusura turno invece dell\'avanzamento fase.' });
+    if (Number(currentPlayer.shelters_to_place ?? 0) > 0) {
+      throw new Error(`${currentPlayer.name} deve ancora collocare tutti i ripari iniziali.`);
     }
 
-    const nextPhase = getNextPhase(gameState.phase);
-    if (!nextPhase) {
-      return res.status(400).json({ success: false, error: 'Non esiste una fase successiva.' });
+    if (!isLastPlayer) {
+      await updateGameTurnState(gameState.id, nextPlayer.id, gameState.round, SETUP_PHASE);
+      await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+        gameState.current_player_id,
+        `Fine collocazione iniziale di ${currentPlayer.name}. Ora tocca a ${nextPlayer.name}.`,
+        JSON.stringify({ fromPlayerId: gameState.current_player_id, toPlayerId: nextPlayer.id, currentPhase: SETUP_PHASE })
+      ]);
+      return ensureValidGameState();
     }
 
-    await updateGamePhase(gameState.id, nextPhase);
+    const pending = await get('SELECT COUNT(*) AS pending FROM players WHERE shelters_to_place > 0');
+    if (Number(pending?.pending ?? 0) > 0) {
+      throw new Error('Ci sono ancora ripari iniziali da collocare.');
+    }
+
+    await run('UPDATE players SET has_moved_this_turn = 0, has_gathered_this_turn = 0');
+    await updateGameTurnState(gameState.id, firstPlayer.id, 1, 'production');
     await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
       gameState.current_player_id,
-      `La partita passa alla fase ${nextPhase}.`,
-      JSON.stringify({ fromPhase: gameState.phase, toPhase: nextPhase })
+      `Collocazione iniziale completata. Inizia il round 1 con Produzione di ${firstPlayer.name}.`,
+      JSON.stringify({ fromPlayerId: gameState.current_player_id, toPlayerId: firstPlayer.id, currentPhase: 'production', round: 1 })
     ]);
+    return ensureValidGameState();
+  }
 
-    res.json({ success: true, data: await ensureValidGameState() });
+  if (!TURN_PHASES.includes(currentPhase)) {
+    throw new Error(`Fase non riconosciuta: ${currentPhase}.`);
+  }
+
+  if (!isLastPlayer) {
+    await updateGameTurnState(gameState.id, nextPlayer.id, gameState.round, currentPhase);
+    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+      gameState.current_player_id,
+      `${currentPhase} di ${players[currentIndex].name} completata. Ora tocca a ${nextPlayer.name}.`,
+      JSON.stringify({ fromPlayerId: gameState.current_player_id, toPlayerId: nextPlayer.id, currentPhase })
+    ]);
+    return ensureValidGameState();
+  }
+
+  const nextPhase = currentPhase === 'transformation' ? 'production' : getNextPhase(currentPhase);
+  const nextRound = currentPhase === 'transformation' ? gameState.round + 1 : gameState.round;
+
+  if (nextPhase === 'production') {
+    await run('UPDATE players SET has_moved_this_turn = 0, has_gathered_this_turn = 0');
+  } else if (nextPhase === 'movement') {
+    await run('UPDATE players SET has_moved_this_turn = 0');
+  }
+
+  await updateGameTurnState(gameState.id, firstPlayer.id, nextRound, nextPhase);
+  await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+    gameState.current_player_id,
+    currentPhase === 'transformation'
+      ? `Round ${gameState.round} completato. Inizia il round ${nextRound} con Produzione di ${firstPlayer.name}.`
+      : `La fase ${currentPhase} e completata. Ora inizia ${nextPhase} con ${firstPlayer.name}.`,
+    JSON.stringify({ fromPlayerId: gameState.current_player_id, toPlayerId: firstPlayer.id, fromPhase: currentPhase, toPhase: nextPhase, round: nextRound })
+  ]);
+
+  return ensureValidGameState();
+}
+
+router.post('/phase/next', async (_req, res) => {
+  try {
+    res.json({ success: true, data: await advanceToNextPlayerOrPhase() });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/turn/advance-phase', async (_req, res) => {
+  try {
+    res.json({ success: true, data: await advanceToNextPlayerOrPhase() });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
   }
 });
 
@@ -1538,57 +1621,9 @@ router.get('/log', async (_req, res) => {
 
 router.post('/turn/end', async (_req, res) => {
   try {
-    const gameState = await ensureValidGameState();
-    if (!gameState || !gameState.current_player_id) {
-      return res.status(400).json({ success: false, error: 'Lo stato della partita non è inizializzato.' });
-    }
-
-    const players = await fetchPlayersForTurnOrder();
-    if (players.length === 0) {
-      return res.status(400).json({ success: false, error: 'No players found.' });
-    }
-
-    const currentIndex = players.findIndex((player) => Number(player.id) === Number(gameState.current_player_id));
-    if (currentIndex === -1) {
-      return res.status(400).json({ success: false, error: 'Il giocatore corrente non esiste più.' });
-    }
-
-    const isLastPlayer = currentIndex === players.length - 1;
-    const nextPlayer = isLastPlayer ? players[0] : players[currentIndex + 1];
-    const hasPendingPlacement = await get('SELECT COUNT(*) AS pending FROM players WHERE shelters_to_place > 0');
-
-    let nextRound = gameState.round;
-    let nextPhase = gameState.phase;
-    let message = '';
-
-    if (gameState.phase === SETUP_PHASE) {
-      nextPhase = Number(hasPendingPlacement?.pending ?? 0) > 0 ? SETUP_PHASE : 'production';
-      await run('UPDATE game_state SET current_player_id = ?, round = ?, phase = ? WHERE id = ?', [nextPlayer.id, nextRound, nextPhase, gameState.id]);
-      message = nextPhase === SETUP_PHASE
-        ? `Fine turno di collocazione di ${gameState.current_player_name}. Ora tocca a ${nextPlayer.name}.`
-        : `Collocazione iniziale completata. Inizia la fase production del round ${nextRound} con ${nextPlayer.name}.`;
-    } else if (gameState.phase === 'end_turn') {
-      nextRound = isLastPlayer ? gameState.round + 1 : gameState.round;
-      nextPhase = 'production';
-      await run('UPDATE players SET has_moved_this_turn = 0, has_gathered_this_turn = 0');
-      await run('UPDATE game_state SET current_player_id = ?, round = ?, phase = ? WHERE id = ?', [nextPlayer.id, nextRound, nextPhase, gameState.id]);
-      message = isLastPlayer
-        ? `Fine round ${gameState.round}. Ora inizia il round ${nextRound}. Tocca ad ${nextPlayer.name}.`
-        : `Fine turno di ${gameState.current_player_name}. Ora tocca a ${nextPlayer.name} nella fase production.`;
-    } else {
-      return res.status(400).json({ success: false, error: 'Puoi chiudere il turno solo durante setup_placement o end_turn.' });
-    }
-
-    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
-      gameState.current_player_id,
-      message,
-      JSON.stringify({ fromPlayerId: gameState.current_player_id, toPlayerId: nextPlayer.id, round: nextRound, phase: nextPhase })
-    ]);
-
-    const updatedGameState = await ensureValidGameState();
-    res.json({ success: true, data: updatedGameState });
+    res.json({ success: true, data: await advanceToNextPlayerOrPhase() });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    res.status(400).json({ success: false, error: error.message });
   }
 });
 

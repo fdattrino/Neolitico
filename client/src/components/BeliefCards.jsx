@@ -20,10 +20,10 @@ function BeliefCards({ beliefs, players, currentPlayerId, currentPhase, onBuy })
         {beliefs.map((belief) => (
           <div key={belief.id} className="card belief-card">
             <h3>{belief.name}</h3>
-            <p>{belief.description}</p>
-            <p><strong>Tipo:</strong> {belief.type_code}</p>
-            <p><strong>Costo:</strong> {belief.cost} risorse</p>
-            <p><strong>Guadagno base:</strong> +{belief.resource_gain} risorse</p>
+            <p className="belief-meta"><strong>Tipo:</strong> {belief.type_code}</p>
+            <p className="belief-meta"><strong>Costo:</strong> {belief.cost}</p>
+            <p className="belief-meta"><strong>Guadagno:</strong> +{belief.resource_gain}</p>
+            <p className="belief-description">{belief.description}</p>
             <div className="actions">
               {players.map((player) => {
                 const alreadyOwned = isAlreadyOwned(player, belief.id);

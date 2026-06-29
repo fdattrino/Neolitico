@@ -15,9 +15,18 @@ const PHASE_LABELS = {
   movement: 'Movimento',
   post_movement_check: 'Verifica post movimento',
   beliefs: 'Credenze',
-  transformation: 'Trasformazione',
-  end_turn: 'Fine turno'
+  transformation: 'Trasformazione'
 };
+const TURN_PHASE_ORDER = [
+  'production',
+  'maintenance',
+  'event',
+  'population',
+  'movement',
+  'post_movement_check',
+  'beliefs',
+  'transformation'
+];
 
 function App() {
   const [players, setPlayers] = useState([]);
@@ -155,7 +164,7 @@ function App() {
 
   const advancePhase = () => (
     performAction(
-      () => fetch(`${API_BASE}/turn/advance-phase`, {
+      () => fetch(`${API_BASE}/phase/next`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       }),
@@ -259,21 +268,28 @@ function App() {
     )
   );
 
-  const endTurn = () => (
-    performAction(
-      () => fetch(`${API_BASE}/turn/end`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      }),
-      'Turno aggiornato.',
-      'Fine turno non riuscita'
-    )
-  );
-
-  const currentPhase = gameState?.phase || 'setup_placement';
+  const currentPhase = gameState?.current_phase || gameState?.phase || 'setup_placement';
   const currentPlayerId = gameState?.current_player_id;
-  const canCloseTurn = currentPhase === 'setup_placement' || currentPhase === 'end_turn';
-  const turnButtonLabel = currentPhase === 'setup_placement' ? 'Termina turno collocazione' : 'Fine turno';
+  const orderedPlayers = [...players].sort((firstPlayer, secondPlayer) => Number(firstPlayer.id) - Number(secondPlayer.id));
+  const currentPlayerIndex = orderedPlayers.findIndex((player) => Number(player.id) === Number(currentPlayerId));
+  const isLastPlayerInOrder = currentPlayerIndex >= 0 && currentPlayerIndex === orderedPlayers.length - 1;
+  const nextPlayer = currentPlayerIndex >= 0
+    ? orderedPlayers[isLastPlayerInOrder ? 0 : currentPlayerIndex + 1]
+    : null;
+  const currentPlayer = currentPlayerIndex >= 0 ? orderedPlayers[currentPlayerIndex] : null;
+  const currentPhaseIndex = TURN_PHASE_ORDER.indexOf(currentPhase);
+  const nextPhase = currentPhase === 'setup_placement'
+    ? (isLastPlayerInOrder ? 'production' : 'setup_placement')
+    : currentPhaseIndex >= 0
+      ? (currentPhase === 'transformation'
+        ? 'production'
+        : TURN_PHASE_ORDER[currentPhaseIndex + 1] || 'production')
+      : 'production';
+  const advanceButtonLabel = currentPlayer && nextPlayer
+    ? `${PHASE_LABELS[currentPhase] || currentPhase} ${currentPlayer.name} -> ${PHASE_LABELS[nextPhase] || nextPhase} ${nextPlayer.name}`
+    : 'Avanza fase';
+  const canAdvanceSetupPlacement = currentPhase !== 'setup_placement'
+    || Number(currentPlayer?.shelters_to_place ?? 0) === 0;
 
   return (
     <div className="app-shell">
@@ -300,8 +316,7 @@ function App() {
           <section className="turn-panel">
             <div>
               <p className="eyebrow">Turno corrente</p>
-              <h2>Round {gameState?.round} - Tocca ad {gameState?.current_player_name}</h2>
-              <p><strong>Fase:</strong> {PHASE_LABELS[currentPhase] || currentPhase}</p>
+              <h2>Round {gameState?.round} - Fase: {PHASE_LABELS[currentPhase] || currentPhase} - Tocca ad {gameState?.current_player_name}</h2>
             </div>
             <div className="actions">
               {currentPhase === 'maintenance' && currentPlayerId && (
@@ -313,52 +328,49 @@ function App() {
               {currentPhase === 'post_movement_check' && (
                 <button onClick={verifyPostMovement}>Verifica conflitti</button>
               )}
-              {!canCloseTurn && (
-                <button onClick={advancePhase}>Avanza fase</button>
-              )}
-              {canCloseTurn && (
-                <button onClick={endTurn}>{turnButtonLabel}</button>
-              )}
+              <button onClick={advancePhase} disabled={!canAdvanceSetupPlacement}>
+                {advanceButtonLabel}
+              </button>
             </div>
           </section>
           <div className="game-layout">
-            <div className="left-column">
-              <section className="panel">
-                <PlayerPanel
-                  players={players}
-                  territories={territories}
-                  developments={developments}
-                  currentPlayerId={currentPlayerId}
-                  currentPhase={currentPhase}
-                  onGather={gatherResources}
-                  onBuildShelter={buildShelter}
-                  onUpgradeVillage={upgradeToVillage}
-                  onUpgradeCity={upgradeToCity}
-                />
-              </section>
-              <section className="panel">
-                <MapBoard
-                  players={players}
-                  territories={territories}
-                  developments={developments}
-                  currentPlayerId={currentPlayerId}
-                  currentPhase={currentPhase}
-                  onMove={movePlayer}
-                  onBattle={battleInTerritory}
-                  onPlaceShelter={placeShelter}
-                />
-              </section>
-              <section className="panel">
-                <EventPanel players={players} currentPlayerId={currentPlayerId} currentPhase={currentPhase} onDraw={drawEvent} events={events} />
-              </section>
-              <section className="panel">
-                <GameLog log={log} />
-              </section>
-            </div>
-            <div className="right-column">
-              <section className="panel">
+            <section className="panel players-panel">
+              <PlayerPanel
+                players={players}
+                territories={territories}
+                developments={developments}
+                currentPlayerId={currentPlayerId}
+                currentPhase={currentPhase}
+                onGather={gatherResources}
+                onBuildShelter={buildShelter}
+                onUpgradeVillage={upgradeToVillage}
+                onUpgradeCity={upgradeToCity}
+              />
+            </section>
+            <section className="panel map-panel">
+              <MapBoard
+                players={players}
+                territories={territories}
+                developments={developments}
+                currentPlayerId={currentPlayerId}
+                currentPhase={currentPhase}
+                onMove={movePlayer}
+                onBattle={battleInTerritory}
+                onPlaceShelter={placeShelter}
+              />
+            </section>
+            <div className="bottom-layout">
+              <section className="panel beliefs-panel">
                 <BeliefCards beliefs={beliefs} players={players} currentPlayerId={currentPlayerId} currentPhase={currentPhase} onBuy={buyBelief} />
               </section>
+              <div className="events-stack">
+                <section className="panel events-panel">
+                  <EventPanel players={players} currentPlayerId={currentPlayerId} currentPhase={currentPhase} onDraw={drawEvent} events={events} />
+                </section>
+                <section className="panel log-panel">
+                  <GameLog log={log} />
+                </section>
+              </div>
             </div>
           </div>
         </>
