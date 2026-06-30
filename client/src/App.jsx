@@ -198,14 +198,14 @@ function App() {
     )
   );
 
-  const skipMove = (playerId) => (
+  const finishMovement = (playerId) => (
     performAction(
-      () => fetch(`${API_BASE}/players/${playerId}/skip-move`, {
+      () => fetch(`${API_BASE}/players/${playerId}/finish-movement`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       }),
-      'Trasferimento saltato.',
-      'Salto trasferimento non riuscito'
+      'Fase trasferimento conclusa.',
+      'Conclusione trasferimenti non riuscita'
     )
   );
 
@@ -237,17 +237,6 @@ function App() {
     );
     setSuccessMessage(`Produzione del round completata: +${totalProduction} risorse complessive.`);
   };
-
-  const buildShelter = (playerId) => (
-    performAction(
-      () => fetch(`${API_BASE}/players/${playerId}/build-shelter`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      }),
-      'Riparo costruito con successo.',
-      'Costruzione non riuscita'
-    )
-  );
 
   const placeShelter = (playerId, territoryId) => (
     performAction(
@@ -330,6 +319,7 @@ function App() {
     || Number(currentPlayer?.shelters_to_place ?? 0) === 0;
   const advancePhaseDisabled = currentPhase === 'population'
     || currentPhase === 'production'
+    || currentPhase === 'movement'
     || !canAdvanceSetupPlacement;
 
   return (
@@ -385,7 +375,6 @@ function App() {
                 developments={developments}
                 currentPlayerId={currentPlayerId}
                 currentPhase={currentPhase}
-                onBuildShelter={buildShelter}
               />
             </section>
             <section className="panel map-panel">
@@ -396,7 +385,7 @@ function App() {
                 currentPlayerId={currentPlayerId}
                 currentPhase={currentPhase}
                 onMove={movePlayer}
-                onSkipMove={skipMove}
+                onFinishMovement={finishMovement}
                 onBattle={battleInTerritory}
                 onPlaceShelter={placeShelter}
                 onUpgradeVillage={upgradeToVillage}

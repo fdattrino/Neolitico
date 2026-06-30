@@ -1103,10 +1103,6 @@ router.post('/players/:id/move', async (req, res) => {
       return;
     }
 
-    if (Number(player.has_moved_this_turn) === 1) {
-      return res.status(400).json({ success: false, error: 'Hai già effettuato uno spostamento in questo turno.' });
-    }
-
     if (sheltersToMove + villagesToMove <= 0) {
       return res.status(400).json({ success: false, error: 'Devi trasferire almeno 1 riparo o 1 villaggio.' });
     }
@@ -1160,7 +1156,6 @@ router.post('/players/:id/move', async (req, res) => {
       'UPDATE territory_development SET shelters = shelters + ?, villages = villages + ? WHERE id = ?',
       [sheltersToMove, villagesToMove, destinationDevelopment.id]
     );
-    await run('UPDATE players SET has_moved_this_turn = 1 WHERE id = ?', [playerId]);
 
     const movedParts = [];
     if (sheltersToMove > 0) {
@@ -1182,6 +1177,46 @@ router.post('/players/:id/move', async (req, res) => {
         villagesToMove,
         citiesMoved: 0
       })
+    ]);
+
+    res.json({ success: true, data: await buildSharedPayload(gameState.current_player_id) });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/players/:id/finish-movement', async (req, res) => {
+  try {
+    const playerId = Number(req.params.id);
+
+    if (Number.isNaN(playerId)) {
+      return res.status(400).json({ success: false, error: 'Valid player id is required.' });
+    }
+
+    const gameState = await requireCurrentPlayer(playerId, res);
+    if (!gameState) {
+      return;
+    }
+
+    const phaseState = await requireGamePhase('movement', res, 'fine trasferimenti');
+    if (!phaseState) {
+      return;
+    }
+
+    const player = await get('SELECT * FROM players WHERE id = ?', [playerId]);
+    if (!player) {
+      return res.status(404).json({ success: false, error: 'Player not found.' });
+    }
+
+    if (!(await requirePlacementPhaseComplete(player, res, 'fine trasferimenti'))) {
+      return;
+    }
+
+    await run('UPDATE players SET has_moved_this_turn = 1 WHERE id = ?', [playerId]);
+    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+      playerId,
+      `${player.name} conclude la fase trasferimento.`,
+      JSON.stringify({ playerId, finishedMovement: true })
     ]);
 
     const nextState = await advanceTurnPhase();
@@ -1216,10 +1251,6 @@ router.post('/players/:id/skip-move', async (req, res) => {
 
     if (!(await requirePlacementPhaseComplete(player, res, 'salto trasferimento'))) {
       return;
-    }
-
-    if (Number(player.has_moved_this_turn) === 1) {
-      return res.status(400).json({ success: false, error: 'Hai già effettuato uno spostamento in questo turno.' });
     }
 
     await run('UPDATE players SET has_moved_this_turn = 1 WHERE id = ?', [playerId]);

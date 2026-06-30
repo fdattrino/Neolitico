@@ -47,7 +47,7 @@ async function insertTerritories() {
         territory.position_x,
         territory.position_y,
         territory.prey_capacity,
-        territory.prey_capacity,
+        territory.prey_remaining ?? territory.prey_capacity,
         territory.shelter_yield,
         territory.village_yield,
         territory.city_yield,

@@ -1,9 +1,9 @@
 const { initDb } = require('./db');
-const { resetAndSeedGame } = require('./gameSetup');
+const { resetGameSession } = require('./gameSetup');
 
 async function seed() {
   await initDb();
-  await resetAndSeedGame(1);
+  await resetGameSession(1);
 
   console.log('Seed data inserted into neolitico.sqlite');
 }

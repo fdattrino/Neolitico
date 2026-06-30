@@ -3,8 +3,7 @@ function PlayerPanel({
   territories,
   developments,
   currentPlayerId,
-  currentPhase,
-  onBuildShelter
+  currentPhase
 }) {
   const activePlayerId = Number(currentPlayerId);
   const getPlayerDevelopments = (player) => (
@@ -50,8 +49,6 @@ function PlayerPanel({
           const isActivePlayer = Number(player.id) === activePlayerId;
           const settlementSummary = getSettlementSummary(player);
           const sheltersToPlace = Number(player.shelters_to_place ?? 0);
-          const isPlacementPhase = sheltersToPlace > 0;
-          const canBuildShelter = currentPhase === 'transformation' && isActivePlayer && !isPlacementPhase && Number(player.resources) >= 5;
 
           return (
             <div key={player.id} className="card player-card">
@@ -76,11 +73,9 @@ function PlayerPanel({
                   <p className="hint">Nessun insediamento</p>
                 )}
               </div>
-              <div className="actions player-actions">
-                <button onClick={() => onBuildShelter(player.id)} disabled={!canBuildShelter}>
-                  {currentPhase !== 'transformation' ? 'Disponibile in Trasformazione' : !isActivePlayer ? 'In attesa del turno' : isPlacementPhase ? 'Disponibile dopo la collocazione iniziale' : Number(player.resources) < 5 ? 'Servono 5 risorse' : 'Costruisci riparo'}
-                </button>
-              </div>
+              {currentPhase === 'transformation' && isActivePlayer && (
+                <p className="hint">Durante questa fase puoi solo trasformare ripari in villaggi o villaggi in città.</p>
+              )}
             </div>
           );
         })}

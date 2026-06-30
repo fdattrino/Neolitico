@@ -10,7 +10,7 @@ function MapBoard({
   currentPlayerId,
   currentPhase,
   onMove,
-  onSkipMove,
+  onFinishMovement,
   onBattle,
   onPlaceShelter,
   onUpgradeVillage,
@@ -139,12 +139,12 @@ function MapBoard({
     }
   };
 
-  const handleSkipMove = async (playerId) => {
+  const handleFinishMovement = async (playerId) => {
     try {
       setError('');
-      await onSkipMove(playerId);
+      await onFinishMovement(playerId);
     } catch (err) {
-      setError(err.message || 'Salto trasferimento non riuscito');
+      setError(err.message || 'Conclusione trasferimenti non riuscita');
     }
   };
 
@@ -280,17 +280,30 @@ function MapBoard({
               : null;
             const activePlayerShelters = Number(activePlayerDevelopment?.shelters ?? 0);
             const activePlayerVillages = Number(activePlayerDevelopment?.villages ?? 0);
+            const isTransformationPhaseForActivePlayer = currentPhase === 'transformation'
+              && Boolean(activePlayer)
+              && !activePlayerInPlacementPhase;
             const maxVillageQuantity = Math.min(Math.floor(activePlayerShelters / 3), Math.floor(activePlayerResources / VILLAGE_COST));
             const maxCityQuantity = Math.min(Math.floor(activePlayerVillages / 3), Math.floor(activePlayerResources / CITY_COST));
             const selectedTransformation = transformationSelections[territory.id] || { villageQuantity: 1, cityQuantity: 1 };
-            const canUpgradeVillageInTerritory = currentPhase === 'transformation'
-              && Boolean(activePlayer)
-              && !activePlayerInPlacementPhase
+            const canUpgradeVillageInTerritory = isTransformationPhaseForActivePlayer
               && maxVillageQuantity >= 1;
-            const canUpgradeCityInTerritory = currentPhase === 'transformation'
-              && Boolean(activePlayer)
-              && !activePlayerInPlacementPhase
+            const canUpgradeCityInTerritory = isTransformationPhaseForActivePlayer
               && maxCityQuantity >= 1;
+            const showVillageResourcesHint = isTransformationPhaseForActivePlayer
+              && activePlayerShelters >= 3
+              && activePlayerResources < VILLAGE_COST
+              && !canUpgradeVillageInTerritory;
+            const showVillageSheltersHint = isTransformationPhaseForActivePlayer
+              && activePlayerShelters > 0
+              && activePlayerShelters < 3;
+            const showCityResourcesHint = isTransformationPhaseForActivePlayer
+              && activePlayerVillages >= 3
+              && activePlayerResources < CITY_COST
+              && !canUpgradeCityInTerritory;
+            const showCityVillagesHint = isTransformationPhaseForActivePlayer
+              && activePlayerVillages > 0
+              && activePlayerVillages < 3;
 
             return (
             <div key={territory.id} className="territory-cell territory-card">
@@ -386,6 +399,22 @@ function MapBoard({
                   )}
                 </div>
               )}
+              {isTransformationPhaseForActivePlayer && (
+                <div className="territory-actions">
+                  {showVillageResourcesHint && (
+                    <span className="turn-waiting">Servono 8 risorse per trasformare 3 ripari in 1 villaggio.</span>
+                  )}
+                  {showVillageSheltersHint && (
+                    <span className="turn-waiting">Servono 3 ripari nello stesso territorio.</span>
+                  )}
+                  {showCityResourcesHint && (
+                    <span className="turn-waiting">Servono 40 risorse per trasformare 3 villaggi in 1 città.</span>
+                  )}
+                  {showCityVillagesHint && (
+                    <span className="turn-waiting">Servono 3 villaggi nello stesso territorio.</span>
+                  )}
+                </div>
+              )}
             </div>
             );
           })}
@@ -414,13 +443,11 @@ function MapBoard({
             const reachableTerritories = selectedSourceTerritory ? getReachableTerritoriesFromSource(selectedSourceTerritory.id) : [];
             const maxShelters = Number(selectedSourceTerritory?.shelters ?? 0);
             const maxVillages = Number(selectedSourceTerritory?.villages ?? 0);
-            const hasMovedThisTurn = Number(player.has_moved_this_turn) === 1;
             const isPlacementPhase = Number(player.shelters_to_place ?? 0) > 0;
             const totalToMove = Number(selection.sheltersToMove ?? 0) + Number(selection.villagesToMove ?? 0);
             const isAdjacent = isAdjacentTerritory(selection.sourceTerritoryId, selection.destinationTerritoryId);
             const moveDisabled = currentPhase !== 'movement'
               || isPlacementPhase
-              || hasMovedThisTurn
               || sourceTerritories.length === 0
               || !selection.sourceTerritoryId
               || !selection.destinationTerritoryId
@@ -428,7 +455,7 @@ function MapBoard({
               || totalToMove <= 0
               || Number(selection.sheltersToMove ?? 0) > maxShelters
               || Number(selection.villagesToMove ?? 0) > maxVillages;
-            const skipDisabled = currentPhase !== 'movement' || isPlacementPhase || hasMovedThisTurn;
+            const finishDisabled = currentPhase !== 'movement' || isPlacementPhase;
 
             return (
               <div className="move-control">
@@ -448,7 +475,7 @@ function MapBoard({
                       }
                     };
                   })}
-                  disabled={currentPhase !== 'movement' || isPlacementPhase || hasMovedThisTurn || sourceTerritories.length === 0}
+                  disabled={currentPhase !== 'movement' || isPlacementPhase || sourceTerritories.length === 0}
                 >
                   <option value="">{sourceTerritories.length > 0 ? 'Territorio di partenza' : 'Nessun territorio valido'}</option>
                   {sourceTerritories.map((territory) => (
@@ -471,7 +498,7 @@ function MapBoard({
                       destinationTerritoryId: event.target.value
                     }
                   }))}
-                  disabled={currentPhase !== 'movement' || isPlacementPhase || hasMovedThisTurn || !selection.sourceTerritoryId || reachableTerritories.length === 0}
+                  disabled={currentPhase !== 'movement' || isPlacementPhase || !selection.sourceTerritoryId || reachableTerritories.length === 0}
                 >
                   <option value="">{reachableTerritories.length > 0 ? 'Territorio di destinazione' : 'Nessun territorio adiacente'}</option>
                   {reachableTerritories.map((territory) => (
@@ -491,7 +518,7 @@ function MapBoard({
                         sheltersToMove: Number(event.target.value)
                       }
                     }))}
-                    disabled={currentPhase !== 'movement' || isPlacementPhase || hasMovedThisTurn || maxShelters === 0}
+                    disabled={currentPhase !== 'movement' || isPlacementPhase || maxShelters === 0}
                   >
                     {Array.from({ length: maxShelters + 1 }, (_, index) => (
                       <option key={`shelters-${player.id}-${index}`} value={index}>
@@ -511,7 +538,7 @@ function MapBoard({
                         villagesToMove: Number(event.target.value)
                       }
                     }))}
-                    disabled={currentPhase !== 'movement' || isPlacementPhase || hasMovedThisTurn || maxVillages === 0}
+                    disabled={currentPhase !== 'movement' || isPlacementPhase || maxVillages === 0}
                   >
                     {Array.from({ length: maxVillages + 1 }, (_, index) => (
                       <option key={`villages-${player.id}-${index}`} value={index}>
@@ -521,10 +548,9 @@ function MapBoard({
                   </select>
                 </label>
                 <button onClick={() => handleMove(player.id)} disabled={moveDisabled}>Sposta</button>
-                <button onClick={() => handleSkipMove(player.id)} disabled={skipDisabled}>Salta trasferimento</button>
+                <button onClick={() => handleFinishMovement(player.id)} disabled={finishDisabled}>Fine trasferimenti</button>
                 {currentPhase !== 'movement' && <span className="turn-waiting">Disponibile in Movimento</span>}
                 {isPlacementPhase && <span className="turn-waiting">Colloca prima i ripari iniziali</span>}
-                {hasMovedThisTurn && <span className="turn-waiting">Trasferimento già effettuato</span>}
                 {sourceTerritories.length === 0 && <span className="turn-waiting">Non ci sono ripari o villaggi da trasferire.</span>}
                 {sourceTerritories.length > 0 && selection.sourceTerritoryId && reachableTerritories.length === 0 && <span className="turn-waiting">Nessun territorio adiacente disponibile</span>}
               </div>
