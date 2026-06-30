@@ -8,7 +8,7 @@ import MapBoard from './components/MapBoard';
 const API_BASE = 'http://localhost:3000/api';
 const PHASE_LABELS = {
   setup_placement: 'Collocazione iniziale',
-  production: 'Produzione',
+  production: 'Produzione del round',
   maintenance: 'Mantenimento',
   event: 'Imprevisto',
   population: 'Crescita popolazione',
@@ -186,41 +186,56 @@ function App() {
     );
   };
 
-  const movePlayer = (playerId, sourceTerritoryId, territoryId, sheltersToMove = 0, villagesToMove = 0) => (
+  const movePlayer = (playerId, fromTerritoryId, toTerritoryId, sheltersToMove = 0, villagesToMove = 0) => (
     performAction(
       () => fetch(`${API_BASE}/players/${playerId}/move`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sourceTerritoryId, territoryId, sheltersToMove, villagesToMove })
+        body: JSON.stringify({ fromTerritoryId, toTerritoryId, sheltersToMove, villagesToMove })
       }),
       'Spostamento completato.',
       'Spostamento non riuscito'
     )
   );
 
-  const battleInTerritory = (territoryId) => (
+  const skipMove = (playerId) => (
+    performAction(
+      () => fetch(`${API_BASE}/players/${playerId}/skip-move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      }),
+      'Trasferimento saltato.',
+      'Salto trasferimento non riuscito'
+    )
+  );
+
+  const battleInTerritory = (territoryId, attackerId, battleType) => (
     performAction(
       () => fetch(`${API_BASE}/territories/${territoryId}/battle`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ attackerId, battleType })
       }),
       'Battaglia risolta.',
       'Battaglia non riuscita'
     )
   );
 
-  const gatherResources = async (playerId) => {
+  const applyRoundProduction = async () => {
     const result = await performAction(
-      () => fetch(`${API_BASE}/players/${playerId}/gather`, {
+      () => fetch(`${API_BASE}/production/apply-round`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       }),
       '',
-      'Raccolta risorse non riuscita'
+      'Produzione del round non riuscita'
     );
 
-    const totalProduction = Number(result.data?.production?.totalProduction ?? 0);
-    setSuccessMessage(`Produzione completata: +${totalProduction} risorse.`);
+    const totalProduction = (result.data?.productionResults || []).reduce(
+      (sum, playerResult) => sum + Number(playerResult.totalProduction ?? 0),
+      0
+    );
+    setSuccessMessage(`Produzione del round completata: +${totalProduction} risorse complessive.`);
   };
 
   const buildShelter = (playerId) => (
@@ -246,29 +261,48 @@ function App() {
     )
   );
 
-  const upgradeToVillage = (playerId, territoryId) => (
+  const upgradeToVillage = (playerId, territoryId, quantity) => (
     performAction(
       () => fetch(`${API_BASE}/players/${playerId}/upgrade-to-village`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ territoryId })
+        body: JSON.stringify({ territoryId, quantity })
       }),
       'Villaggio formato con successo.',
       'Formazione villaggio non riuscita'
     )
   );
 
-  const upgradeToCity = (playerId, territoryId) => (
+  const upgradeToCity = (playerId, territoryId, quantity) => (
     performAction(
       () => fetch(`${API_BASE}/players/${playerId}/upgrade-to-city`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ territoryId })
+        body: JSON.stringify({ territoryId, quantity })
       }),
       'Città fondata con successo.',
       'Fondazione città non riuscita'
     )
   );
+
+  const finishTransformation = (playerId) => (
+    performAction(
+      () => fetch(`${API_BASE}/players/${playerId}/finish-transformation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      }),
+      'Fase trasformazione conclusa.',
+      'Conclusione trasformazioni non riuscita'
+    )
+  );
+
+  const advanceCurrentPhase = () => {
+    if (currentPhase === 'transformation' && currentPlayerId) {
+      return finishTransformation(currentPlayerId);
+    }
+
+    return advancePhase();
+  };
 
   const currentPhase = gameState?.current_phase || gameState?.phase || 'setup_placement';
   const currentPlayerId = gameState?.current_player_id;
@@ -295,6 +329,7 @@ function App() {
   const canAdvanceSetupPlacement = currentPhase !== 'setup_placement'
     || Number(currentPlayer?.shelters_to_place ?? 0) === 0;
   const advancePhaseDisabled = currentPhase === 'population'
+    || currentPhase === 'production'
     || !canAdvanceSetupPlacement;
 
   return (
@@ -325,6 +360,9 @@ function App() {
               <h2>Round {gameState?.round} - Fase: {PHASE_LABELS[currentPhase] || currentPhase} - Tocca ad {gameState?.current_player_name}</h2>
             </div>
             <div className="actions">
+              {currentPhase === 'production' && (
+                <button onClick={applyRoundProduction}>Applica produzione del round</button>
+              )}
               {currentPhase === 'maintenance' && currentPlayerId && (
                 <button onClick={() => applyMaintenance(currentPlayerId)}>Applica mantenimento</button>
               )}
@@ -334,7 +372,7 @@ function App() {
               {currentPhase === 'post_movement_check' && (
                 <button onClick={verifyPostMovement}>Verifica conflitti</button>
               )}
-              <button onClick={advancePhase} disabled={advancePhaseDisabled}>
+              <button onClick={advanceCurrentPhase} disabled={advancePhaseDisabled}>
                 {advanceButtonLabel}
               </button>
             </div>
@@ -347,7 +385,6 @@ function App() {
                 developments={developments}
                 currentPlayerId={currentPlayerId}
                 currentPhase={currentPhase}
-                onGather={gatherResources}
                 onBuildShelter={buildShelter}
               />
             </section>
@@ -359,10 +396,12 @@ function App() {
                 currentPlayerId={currentPlayerId}
                 currentPhase={currentPhase}
                 onMove={movePlayer}
+                onSkipMove={skipMove}
                 onBattle={battleInTerritory}
                 onPlaceShelter={placeShelter}
                 onUpgradeVillage={upgradeToVillage}
                 onUpgradeCity={upgradeToCity}
+                onFinishTransformation={finishTransformation}
               />
             </section>
             <div className="bottom-layout">
