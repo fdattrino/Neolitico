@@ -3,6 +3,7 @@ const cors = require('cors');
 const morgan = require('morgan');
 const { initDb } = require('./db');
 const routes = require('./routes');
+const savedGamesRoutes = require('./savedGames');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -15,6 +16,7 @@ app.get('/', (_req, res) => {
   res.json({ success: true, message: 'Neolitico API is running.' });
 });
 
+app.use('/api', savedGamesRoutes);
 app.use('/api', routes);
 
 app.use((_req, res) => {

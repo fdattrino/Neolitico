@@ -4,6 +4,7 @@ import BeliefCards from './components/BeliefCards';
 import EventPanel from './components/EventPanel';
 import GameLog from './components/GameLog';
 import MapBoard from './components/MapBoard';
+import SavedGames from './components/SavedGames';
 
 const API_BASE = 'http://localhost:3000/api';
 const PHASE_LABELS = {
@@ -15,7 +16,8 @@ const PHASE_LABELS = {
   movement: 'Movimento',
   post_movement_check: 'Verifica post movimento',
   beliefs: 'Credenze',
-  transformation: 'Trasformazione'
+  transformation: 'Trasformazione',
+  game_over: 'Fine partita'
 };
 const TURN_PHASE_ORDER = [
   'production',
@@ -32,6 +34,9 @@ function App() {
   const [players, setPlayers] = useState([]);
   const [beliefs, setBeliefs] = useState([]);
   const [events, setEvents] = useState([]);
+  const [lastEvent, setLastEvent] = useState(null);
+  const [saves, setSaves] = useState([]);
+  const [currentSaveName, setCurrentSaveName] = useState('');
   const [territories, setTerritories] = useState([]);
   const [developments, setDevelopments] = useState([]);
   const [log, setLog] = useState([]);
@@ -70,6 +75,13 @@ function App() {
       setPlayers(playersData.data || []);
       setBeliefs(beliefsData.data || []);
       setEvents(eventsData.data || []);
+      try {
+        const savesRes = await fetch(`${API_BASE}/saves`);
+        const savesData = await savesRes.json();
+        setSaves(savesData.data || []);
+      } catch (_savesError) {
+        setSaves([]);
+      }
       setTerritories(territoriesData.data || []);
       setDevelopments(developmentsData.data || []);
       setGameState(gameStateData.data || null);
@@ -118,16 +130,19 @@ function App() {
     )
   );
 
-  const drawEvent = (playerId) => (
-    performAction(
+  const drawEvent = async (playerId) => {
+    const result = await performAction(
       () => fetch(`${API_BASE}/players/${playerId}/draw-event`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       }),
       'Evento risolto.',
       'Pesca evento non riuscita'
-    )
-  );
+    );
+    const player = players.find((item) => Number(item.id) === Number(playerId));
+    setLastEvent({ ...result.data.event, playerName: player?.name });
+    return result;
+  };
 
   const applyMaintenance = (playerId) => (
     performAction(
@@ -173,8 +188,63 @@ function App() {
     )
   );
 
+  const saveGame = async (rawName) => {
+    const name = rawName.trim();
+    const send = (overwrite) => fetch(`${API_BASE}/saves`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, overwrite })
+    });
+
+    let response = await send(false);
+    let result = await response.json();
+
+    if (response.status === 409 && result.exists) {
+      if (!window.confirm(`Esiste già una partita chiamata "${name}". Vuoi sovrascriverla?`)) {
+        return;
+      }
+      response = await send(true);
+      result = await response.json();
+    }
+
+    if (!response.ok) {
+      setSuccessMessage('');
+      setError(result.error || 'Salvataggio non riuscito');
+      throw new Error(result.error);
+    }
+
+    setError('');
+    setCurrentSaveName(result.data?.name || name);
+    await loadData();
+    setSuccessMessage(`Partita "${result.data?.name || name}" salvata.`);
+  };
+
+  const loadSavedGame = async (save) => {
+    if (!window.confirm(`Caricare "${save.name}"? La partita in corso verrà sostituita: salvala prima se vuoi conservarla.`)) {
+      return;
+    }
+    await performAction(
+      () => fetch(`${API_BASE}/saves/${save.id}/load`, { method: 'POST' }),
+      `Partita "${save.name}" caricata.`,
+      'Caricamento non riuscito'
+    );
+    setCurrentSaveName(save.name);
+    setLastEvent(null);
+  };
+
+  const deleteSavedGame = async (save) => {
+    if (!window.confirm(`Eliminare definitivamente "${save.name}"?`)) {
+      return;
+    }
+    await performAction(
+      () => fetch(`${API_BASE}/saves/${save.id}`, { method: 'DELETE' }),
+      `Partita "${save.name}" eliminata.`,
+      'Eliminazione non riuscita'
+    );
+  };
+
   const resetGame = async () => {
-    const confirmed = window.confirm('Avviare una nuova partita? Questa azione resetta le risorse e il diario.');
+    const confirmed = window.confirm('Avviare una nuova partita? Questa azione resetta le risorse e il diario. Se vuoi conservare quella attuale, salvala prima con "Salva partita".');
     if (!confirmed) {
       return;
     }
@@ -184,6 +254,8 @@ function App() {
       'Nuova partita avviata.',
       'Reset non riuscito'
     );
+    setLastEvent(null);
+    setCurrentSaveName('');
   };
 
   const movePlayer = (playerId, fromTerritoryId, toTerritoryId, sheltersToMove = 0, villagesToMove = 0) => (
@@ -312,6 +384,24 @@ function App() {
           : TURN_PHASE_ORDER[currentPhaseIndex + 1] || 'production')
         : currentPhase)
       : 'production';
+  const standings = orderedPlayers
+    .map((player) => {
+      const own = developments.filter((development) => Number(development.player_id) === Number(player.id));
+      const sum = (field) => own.reduce((total, development) => total + Number(development[field] ?? 0), 0);
+      return {
+        id: player.id,
+        name: player.name,
+        cities: sum('cities'),
+        villages: sum('villages'),
+        shelters: sum('shelters'),
+        resources: Number(player.resources ?? 0)
+      };
+    })
+    .sort((a, b) => (b.cities - a.cities) || (b.villages - a.villages) || (b.resources - a.resources));
+  const isDraw = standings.length > 1
+    && standings[0].cities === standings[1].cities
+    && standings[0].villages === standings[1].villages
+    && standings[0].resources === standings[1].resources;
   const advanceButtonLabel = currentPlayer && nextPlayer
     ? `${PHASE_LABELS[currentPhase] || currentPhase} ${currentPlayer.name} -> ${PHASE_LABELS[nextPhase] || nextPhase} ${nextPlayer.name}`
     : 'Avanza fase';
@@ -320,6 +410,8 @@ function App() {
   const advancePhaseDisabled = currentPhase === 'population'
     || currentPhase === 'production'
     || currentPhase === 'movement'
+    || currentPhase === 'event'
+    || currentPhase === 'game_over'
     || !canAdvanceSetupPlacement;
 
   return (
@@ -331,9 +423,14 @@ function App() {
             <h1>Neolitico</h1>
             <p className="subtitle">Simula la vita della comunità preistorica: risorse, credenze, prede ed evoluzione degli insediamenti.</p>
           </div>
-          <button className="hero-button" onClick={resetGame}>
-            Nuova partita
-          </button>
+          <div className="hero-buttons">
+            <button className="hero-button" onClick={() => document.getElementById('saved-games')?.scrollIntoView({ behavior: 'smooth' })}>
+              Salva / carica
+            </button>
+            <button className="hero-button" onClick={resetGame}>
+              Nuova partita
+            </button>
+          </div>
         </div>
       </header>
 
@@ -344,6 +441,22 @@ function App() {
         <p className="status">Caricamento della partita…</p>
       ) : (
         <>
+          {currentPhase === 'game_over' && (
+            <section className="turn-panel">
+              <div>
+                <p className="eyebrow">Fine partita dopo 10 round</p>
+                <h2>{isDraw ? 'Pareggio!' : `Vince ${standings[0]?.name}!`}</h2>
+                <ul>
+                  {standings.map((entry) => (
+                    <li key={entry.id}>
+                      <strong>{entry.name}</strong>: {entry.cities} città, {entry.villages} villaggi, {entry.shelters} ripari, {entry.resources} risorse
+                    </li>
+                  ))}
+                </ul>
+                <p className="hint">Vince chi ha più città; a parità decidono i villaggi e poi le risorse. Premi "Nuova partita" per ricominciare.</p>
+              </div>
+            </section>
+          )}
           <section className="turn-panel">
             <div>
               <p className="eyebrow">Turno corrente</p>
@@ -399,13 +512,22 @@ function App() {
               </section>
               <div className="events-stack">
                 <section className="panel events-panel">
-                  <EventPanel players={players} currentPlayerId={currentPlayerId} currentPhase={currentPhase} onDraw={drawEvent} events={events} />
+                  <EventPanel players={players} currentPlayerId={currentPlayerId} currentPhase={currentPhase} onDraw={drawEvent} events={events} lastEvent={lastEvent} />
                 </section>
                 <section className="panel log-panel">
                   <GameLog log={log} />
                 </section>
               </div>
             </div>
+            <section className="panel saves-panel" id="saved-games">
+              <SavedGames
+                saves={saves}
+                currentName={currentSaveName}
+                onSave={saveGame}
+                onLoad={loadSavedGame}
+                onDelete={deleteSavedGame}
+              />
+            </section>
           </div>
         </>
       )}

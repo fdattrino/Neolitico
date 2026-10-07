@@ -15,6 +15,8 @@ const MAINTENANCE_COSTS = {
   cities: 40
 };
 const SETUP_PHASE = 'setup_placement';
+const GAME_OVER_PHASE = 'game_over';
+const MAX_ROUNDS = 10;
 const TURN_PHASES = [
   'production',
   'maintenance',
@@ -302,7 +304,7 @@ async function requirePlacementPhaseComplete(player, res, actionLabel) {
 }
 
 function isKnownPhase(phase) {
-  return phase === SETUP_PHASE || TURN_PHASES.includes(phase);
+  return phase === SETUP_PHASE || phase === GAME_OVER_PHASE || TURN_PHASES.includes(phase);
 }
 
 function getNextPhase(currentPhase) {
@@ -596,6 +598,51 @@ async function loseDevelopments(playerId, fieldName, amount) {
   }
 
   return { lost, touchedTerritories };
+}
+
+async function computeStandings() {
+  const rows = await all(
+    `SELECT players.id, players.name, players.resources,
+            COALESCE(SUM(territory_development.shelters), 0) AS shelters,
+            COALESCE(SUM(territory_development.villages), 0) AS villages,
+            COALESCE(SUM(territory_development.cities), 0) AS cities
+     FROM players
+     LEFT JOIN territory_development ON territory_development.player_id = players.id
+     GROUP BY players.id
+     ORDER BY players.id`,
+    []
+  );
+
+  const standings = rows
+    .map((row) => ({
+      id: Number(row.id),
+      name: row.name,
+      cities: Number(row.cities),
+      villages: Number(row.villages),
+      shelters: Number(row.shelters),
+      resources: Number(row.resources)
+    }))
+    .sort((a, b) => (b.cities - a.cities) || (b.villages - a.villages) || (b.resources - a.resources));
+
+  const [first, second] = standings;
+  const isDraw = Boolean(first && second
+    && first.cities === second.cities
+    && first.villages === second.villages
+    && first.resources === second.resources);
+
+  return { standings, winner: isDraw ? null : (first ?? null), isDraw };
+}
+
+async function findPlayerTerritory(playerId, field) {
+  return get(
+    `SELECT territory_development.id AS development_id, territories.id AS territory_id, territories.name AS territory_name
+     FROM territory_development
+     INNER JOIN territories ON territories.id = territory_development.territory_id
+     WHERE territory_development.player_id = ? AND territory_development.${field} > 0
+     ORDER BY territory_development.${field} DESC, territories.id
+     LIMIT 1`,
+    [playerId]
+  );
 }
 
 async function loseOneDevelopmentForMaintenance(playerId) {
@@ -1713,9 +1760,14 @@ router.post('/players/:id/draw-event', async (req, res) => {
       logMessage = `${player.name} pesca ${eventCard.title}: perde ${lostResources} risorse.`;
     } else if (eventCard.effect_type === 'lose_shelters') {
       const result = await loseDevelopments(playerId, 'shelters', Number(eventCard.effect_value));
-      logMessage = result.lost === 0
-        ? `${player.name} pesca ${eventCard.title}: non possiede ripari, nessuna perdita.`
-        : `${player.name} pesca ${eventCard.title}: perde ${result.lost} ${result.lost === 1 ? 'riparo' : 'ripari'}.`;
+      if (result.lost > 0) {
+        logMessage = `${player.name} pesca ${eventCard.title}: perde ${result.lost} ${result.lost === 1 ? 'riparo' : 'ripari'}.`;
+      } else {
+        const villageResult = await loseDevelopments(playerId, 'villages', 1);
+        logMessage = villageResult.lost === 0
+          ? `${player.name} pesca ${eventCard.title}: non possiede né ripari né villaggi, nessuna perdita.`
+          : `${player.name} pesca ${eventCard.title}: non ha ripari, perde 1 villaggio.`;
+      }
     } else if (eventCard.effect_type === 'lose_villages') {
       const result = await loseDevelopments(playerId, 'villages', Number(eventCard.effect_value));
       logMessage = result.lost === 0
@@ -1727,23 +1779,27 @@ router.post('/players/:id/draw-event', async (req, res) => {
         ? `${player.name} pesca ${eventCard.title}: non possiede città, nessuna perdita.`
         : `${player.name} pesca ${eventCard.title}: perde 1 città.`;
     } else if (eventCard.effect_type === 'gain_shelters') {
-      if (!player.current_territory_id) {
-        logMessage = `${player.name} pesca ${eventCard.title}: nessun territorio attuale, nessun riparo costruito.`;
+      const target = await findPlayerTerritory(playerId, 'shelters');
+      let targetTerritoryId = target?.territory_id ?? player.current_territory_id;
+      if (!targetTerritoryId) {
+        logMessage = `${player.name} pesca ${eventCard.title}: nessun territorio disponibile, nessun riparo ottenuto.`;
       } else {
-        const territory = await get('SELECT * FROM territories WHERE id = ?', [player.current_territory_id]);
-        const development = await ensureDevelopmentRecord(playerId, player.current_territory_id);
+        const territory = await get('SELECT * FROM territories WHERE id = ?', [targetTerritoryId]);
+        const development = await ensureDevelopmentRecord(playerId, targetTerritoryId);
         await run('UPDATE territory_development SET shelters = shelters + ? WHERE id = ?', [Number(eventCard.effect_value), development.id]);
-        logMessage = `${player.name} pesca ${eventCard.title}: ottiene ${eventCard.effect_value} ripari nella ${territory.name}.`;
+        logMessage = `${player.name} pesca ${eventCard.title}: ottiene ${eventCard.effect_value} ripari nel territorio ${territory.name}.`;
       }
     } else if (eventCard.effect_type === 'gain_village') {
-      if (!player.current_territory_id) {
-        logMessage = `${player.name} pesca ${eventCard.title}: nessun territorio attuale, nessun villaggio conquistato.`;
+      const target = await findPlayerTerritory(playerId, 'villages');
+      if (!target) {
+        logMessage = `${player.name} pesca ${eventCard.title}: non possiede ancora villaggi, l'assalto non produce effetti.`;
       } else {
-        const territory = await get('SELECT * FROM territories WHERE id = ?', [player.current_territory_id]);
-        const development = await ensureDevelopmentRecord(playerId, player.current_territory_id);
-        await run('UPDATE territory_development SET villages = villages + ? WHERE id = ?', [Number(eventCard.effect_value), development.id]);
-        logMessage = `${player.name} pesca ${eventCard.title}: conquista ${eventCard.effect_value} villaggio nella ${territory.name}.`;
+        await run('UPDATE territory_development SET villages = villages + ? WHERE id = ?', [Number(eventCard.effect_value), target.development_id]);
+        logMessage = `${player.name} pesca ${eventCard.title}: conquista ${eventCard.effect_value} villaggio nel territorio ${target.territory_name}.`;
       }
+    } else if (eventCard.effect_type === 'block_population') {
+      await run('UPDATE players SET population_blocked = 1 WHERE id = ?', [playerId]);
+      logMessage = `${player.name} pesca ${eventCard.title}: la crescita della popolazione sarà bloccata nel prossimo turno di crescita.`;
     }
 
     await run('UPDATE players SET resources = ? WHERE id = ?', [newResources, playerId]);
@@ -1781,9 +1837,21 @@ router.post('/players/:id/population', async (req, res) => {
       return;
     }
 
-    const player = await get('SELECT id, name FROM players WHERE id = ?', [playerId]);
+    const player = await get('SELECT id, name, population_blocked FROM players WHERE id = ?', [playerId]);
     if (!player) {
       return res.status(404).json({ success: false, error: 'Player not found.' });
+    }
+
+    if (Number(player.population_blocked ?? 0) === 1) {
+      await run('UPDATE players SET population_blocked = 0 WHERE id = ?', [playerId]);
+      await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+        playerId,
+        `${player.name} non cresce in questo turno: la guerra interna blocca la popolazione.`,
+        JSON.stringify({ phase: 'population', playerId, blocked: true })
+      ]);
+
+      const blockedNextState = await advanceTurnPhase();
+      return res.json({ success: true, data: await buildSharedPayload(blockedNextState.current_player_id) });
     }
 
     const playerDevelopments = await all(
@@ -1961,6 +2029,10 @@ async function advanceTurnPhase() {
     return ensureValidGameState();
   }
 
+  if (currentPhase === GAME_OVER_PHASE) {
+    throw new Error('La partita è terminata. Avvia una nuova partita.');
+  }
+
   if (!TURN_PHASES.includes(currentPhase)) {
     throw new Error(`Fase non riconosciuta: ${currentPhase}.`);
   }
@@ -1981,6 +2053,19 @@ async function advanceTurnPhase() {
         toPhase: currentPhase,
         round: gameState.round
       })
+    ]);
+    return ensureValidGameState();
+  }
+
+  if (currentPhase === 'transformation' && Number(gameState.round) >= MAX_ROUNDS) {
+    const result = await computeStandings();
+    await updateGameTurnState(gameState.id, firstPlayer.id, gameState.round, GAME_OVER_PHASE);
+    await run('INSERT INTO game_log (player_id, message, details) VALUES (?, ?, ?)', [
+      gameState.current_player_id,
+      result.isDraw
+        ? `Fine partita dopo ${MAX_ROUNDS} round: pareggio.`
+        : `Fine partita dopo ${MAX_ROUNDS} round: vince ${result.winner?.name} (${result.winner?.cities} città, ${result.winner?.villages} villaggi, ${result.winner?.resources} risorse).`,
+      JSON.stringify({ phase: GAME_OVER_PHASE, round: gameState.round, ...result })
     ]);
     return ensureValidGameState();
   }

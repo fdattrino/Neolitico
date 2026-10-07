@@ -485,3 +485,76 @@ button:disabled {
     font-size: 0.68rem;
   }
 }
+
+.hero-buttons {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.last-event {
+  margin: 0.8rem 0;
+  padding: 0.7rem 0.9rem;
+  border-left: 4px solid #f4b942;
+  border-radius: 8px;
+  background: rgba(244, 185, 66, 0.15);
+}
+
+.last-event p {
+  margin: 0.3rem 0 0;
+}
+
+.save-form {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.save-form input {
+  flex: 1 1 260px;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid #c9bfa6;
+  border-radius: 8px;
+  font: inherit;
+}
+
+.save-list {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.save-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid #e0d6bd;
+  border-radius: 10px;
+  background: #fbf7ee;
+}
+
+.save-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.9rem;
+}
+
+.save-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+button.danger {
+  background: #a23b3b;
+}
+
+button.danger:hover {
+  background: #7e2c2c;
+}

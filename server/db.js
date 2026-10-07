@@ -84,6 +84,9 @@ function ensurePlayerColumns() {
       if (!columnNames.has('shelters_to_place')) {
         statements.push('ALTER TABLE players ADD COLUMN shelters_to_place INTEGER NOT NULL DEFAULT 6');
       }
+      if (!columnNames.has('population_blocked')) {
+        statements.push('ALTER TABLE players ADD COLUMN population_blocked INTEGER NOT NULL DEFAULT 0');
+      }
 
       const runNext = () => {
         if (statements.length === 0) {
@@ -257,6 +260,7 @@ function initDb() {
         has_moved_this_turn INTEGER NOT NULL DEFAULT 0,
         has_gathered_this_turn INTEGER NOT NULL DEFAULT 0,
         shelters_to_place INTEGER NOT NULL DEFAULT 6,
+        population_blocked INTEGER NOT NULL DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(current_territory_id) REFERENCES territories(id)
       );
