@@ -558,3 +558,11 @@ button.danger {
 button.danger:hover {
   background: #7e2c2c;
 }
+
+button.secondary {
+  background: #5b6b63;
+}
+
+button.secondary:hover {
+  background: #46544d;
+}

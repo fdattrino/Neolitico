@@ -232,6 +232,72 @@ function App() {
     setLastEvent(null);
   };
 
+  const exportSavedGame = async (save) => {
+    try {
+      const response = await fetch(`${API_BASE}/saves/${save.id}/export`);
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.error || 'Esportazione non riuscita');
+      }
+      const blob = await response.blob();
+      const safeName = String(save.name).normalize('NFKD').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-').slice(0, 40) || 'partita';
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `neolitico-${safeName}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setError('');
+      setSuccessMessage(`Partita "${save.name}" esportata: cerca il file nella cartella Download.`);
+    } catch (err) {
+      setSuccessMessage('');
+      setError(err.message || 'Esportazione non riuscita');
+      throw err;
+    }
+  };
+
+  const importSavedGame = async (file) => {
+    try {
+      let content;
+      try {
+        content = JSON.parse(await file.text());
+      } catch (_parseError) {
+        throw new Error('Il file scelto non è una partita del Neolitico.');
+      }
+
+      const send = (overwrite) => fetch(`${API_BASE}/saves/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file: content, overwrite })
+      });
+
+      let response = await send(false);
+      let result = await response.json();
+
+      if (response.status === 409 && result.exists) {
+        if (!window.confirm(`Esiste già una partita chiamata "${result.name}". Vuoi sostituirla con quella del file?`)) {
+          return;
+        }
+        response = await send(true);
+        result = await response.json();
+      }
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Importazione non riuscita');
+      }
+
+      setError('');
+      await loadData();
+      setSuccessMessage(`Partita "${result.data?.name}" importata: premi Carica per aprirla.`);
+    } catch (err) {
+      setSuccessMessage('');
+      setError(err.message || 'Importazione non riuscita');
+      throw err;
+    }
+  };
+
   const deleteSavedGame = async (save) => {
     if (!window.confirm(`Eliminare definitivamente "${save.name}"?`)) {
       return;
@@ -525,6 +591,8 @@ function App() {
                 currentName={currentSaveName}
                 onSave={saveGame}
                 onLoad={loadSavedGame}
+                onExport={exportSavedGame}
+                onImport={importSavedGame}
                 onDelete={deleteSavedGame}
               />
             </section>

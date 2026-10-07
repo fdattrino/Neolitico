@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 function formatDate(value) {
   if (!value) {
@@ -12,9 +12,10 @@ function formatDate(value) {
   return date.toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' });
 }
 
-function SavedGames({ saves = [], currentName = '', onSave, onLoad, onDelete }) {
+function SavedGames({ saves = [], currentName = '', onSave, onLoad, onExport, onImport, onDelete }) {
   const [name, setName] = useState(currentName);
   const [busy, setBusy] = useState(false);
+  const fileInput = useRef(null);
 
   const run = async (action) => {
     setBusy(true);
@@ -32,6 +33,14 @@ function SavedGames({ saves = [], currentName = '', onSave, onLoad, onDelete }) 
     run(() => onSave(name));
   };
 
+  const handleFileChosen = (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (file) {
+      run(() => onImport(file));
+    }
+  };
+
   return (
     <div>
       <h2>Partite salvate</h2>
@@ -44,9 +53,13 @@ function SavedGames({ saves = [], currentName = '', onSave, onLoad, onDelete }) 
           onChange={(event) => setName(event.target.value)}
         />
         <button type="submit" disabled={busy || !name.trim()}>Salva partita</button>
+        <button type="button" className="secondary" disabled={busy} onClick={() => fileInput.current?.click()}>
+          Importa da file
+        </button>
+        <input ref={fileInput} type="file" accept=".json,application/json" hidden onChange={handleFileChosen} />
       </form>
       <p className="hint">
-        Salva lo stato attuale: round, fase, risorse, insediamenti, prede e diario. Un nome già usato viene sovrascritto solo dopo conferma.
+        Salva lo stato attuale: round, fase, risorse, insediamenti, prede e diario. Con Esporta ottieni un file da portare su chiavetta; con Importa da file lo aggiungi all'elenco di un altro computer.
       </p>
       {saves.length === 0 ? (
         <p className="hint">Nessuna partita salvata.</p>
@@ -61,6 +74,7 @@ function SavedGames({ saves = [], currentName = '', onSave, onLoad, onDelete }) 
               </div>
               <div className="save-actions">
                 <button type="button" disabled={busy} onClick={() => run(() => onLoad(save))}>Carica</button>
+                <button type="button" className="secondary" disabled={busy} onClick={() => run(() => onExport(save))}>Esporta</button>
                 <button type="button" className="danger" disabled={busy} onClick={() => run(() => onDelete(save))}>Elimina</button>
               </div>
             </li>
